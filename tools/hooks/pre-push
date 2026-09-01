@@ -1,0 +1,163 @@
+#!/bin/sh
+# Copyright © 2026 Khrustal & Mann
+#              MELBOURNE, VICTORIA, AUSTRALIA, 3000
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied. See the License for the specific language governing
+# permissions and limitations under the License.
+#
+#  pre-push -- keep unverified commits, force-pushes and deletions off master.
+#
+#  READ THIS BEFORE TRUSTING IT. This is NOT branch protection. It is a hook on
+#  one developer's machine:
+#
+#    * it runs only for someone who has installed it (see README.md here);
+#    * `git push --no-verify` skips it entirely, by design, because it is the
+#      escape hatch that replaces the admin bypass GitHub would have given;
+#    * it can be deleted, edited or disabled by anyone who can push.
+#
+#  It stops the accident, not the intent. Server-side rules are unavailable
+#  because GitHub Free does not offer them on private repositories -- classic
+#  branch protection and rulesets both answer 403 "Upgrade to GitHub Pro or
+#  make this repository public". When that changes, this hook should be
+#  replaced rather than supplemented: two enforcement points that can disagree
+#  are worse than one that cannot.
+#
+#  AND READ THIS SECOND, because it is specific to THIS repository and does not
+#  apply to the sibling TargetCore hook this file is adapted from.
+#
+#  Green here is the WEAKEST of the three MSCS repositories' CI, and the gap is
+#  wider than it looks. This repository holds the entire test suite for the
+#  solution -- unit_suite, the transport meshes, every p2p_* security gate, the
+#  fuzz harness -- and CI cannot build ONE of them. Three dependencies
+#  (Platform, P2PeerUtilityHubs, DspChain) have no git remote at all, and TreeFs
+#  is on a private non-GitHub host, so the closure a build needs does not exist
+#  on GitHub to be checked out.
+#
+#  What a green run therefore means: the bookkeeping holds (every source is
+#  wired into the build, no duplicate ctest names, the stale-DLL hazard stays
+#  closed), every suite called by TestMain.cpp is compiled in by BOTH build
+#  systems, and CMakeLists.txt generates. NOTHING IS COMPILED AND NO TEST IS
+#  RUN. The figures this project's evidence rests on -- Windows 41/41, Linux
+#  44/44 -- come from a developer running ctest by hand, and from nothing else.
+#
+#  That is an uncomfortable thing for the repository of record to admit, and it
+#  is the reason this header says it rather than a release note nobody opens.
+#  Read the tick as "the wiring is intact", never as "the tests pass".
+#
+#  WHAT IT ENFORCES, on refs/heads/master only. Other branches push freely --
+#  that is the point, since a branch push is what gets CI to run in the first
+#  place.
+#
+#    1. No deletion of master.
+#    2. No non-fast-forward push (history on master is not rewritten).
+#    3. No commit whose exact SHA has not already gone green in CI.
+#
+#  Rule 3 is the local stand-in for a required status check, and it implies the
+#  same workflow the server-side rule would have forced:
+#
+#      git switch -c fix-something
+#      git push -u origin fix-something      # CI runs on this SHA
+#      # ... wait for green ...
+#      git switch master
+#      git merge --ff-only fix-something     # SHA is preserved, so it stays green
+#      git push
+#
+#  --ff-only matters. A merge commit is a NEW SHA that CI has never seen, and
+#  this hook will refuse it exactly as it refuses any other unverified commit.
+
+set -u
+
+REMOTE_NAME="$1"
+
+PROTECTED="master"
+
+# The workflow FILE, not its display name. repo-invariants.yml calls itself
+# "repo invariants (standalone, siblings NOT required)"; `gh run list --workflow`
+# accepts either, and the filename is the one that does not silently stop
+# matching when somebody rewords the `name:` line.
+WORKFLOW="repo-invariants.yml"
+
+ZERO="0000000000000000000000000000000000000000"
+
+fail() {
+    printf '\n  PUSH REFUSED (%s)\n\n' "$1" >&2
+    shift
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+    printf '\n  Override with:  git push --no-verify\n\n' >&2
+    exit 1
+}
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+while read -r local_ref local_sha remote_ref remote_sha; do
+
+    [ "$remote_ref" = "refs/heads/$PROTECTED" ] || continue
+
+    # --- 1. deletion ------------------------------------------------------
+    case "$local_sha" in
+        "$ZERO"|"") fail "deleting $PROTECTED" \
+            "Refusing to delete the $PROTECTED branch on '$REMOTE_NAME'." ;;
+    esac
+
+    # --- 2. non-fast-forward ---------------------------------------------
+    # A brand-new remote branch has remote_sha = zeroes and nothing to rewrite.
+    if [ "$remote_sha" != "$ZERO" ] && [ -n "$remote_sha" ]; then
+        if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+            fail "non-fast-forward push to $PROTECTED" \
+                "$(printf '%s' "$remote_sha" | cut -c1-8) is not an ancestor of $(printf '%s' "$local_sha" | cut -c1-8)," \
+                "so this would rewrite published history on $PROTECTED."
+        fi
+    fi
+
+    # --- 3. CI must already be green on this exact SHA --------------------
+    if ! command -v gh >/dev/null 2>&1; then
+        fail "cannot verify CI" \
+            "The GitHub CLI (gh) is not on PATH, so the CI status of" \
+            "$(printf '%s' "$local_sha" | cut -c1-8) cannot be checked."
+    fi
+
+    result=$(gh run list --commit "$local_sha" --workflow "$WORKFLOW" \
+                 --limit 1 --json status,conclusion \
+                 -q '.[0] | (.status // "none") + "/" + (.conclusion // "none")' \
+                 2>/dev/null)
+
+    case "$result" in
+        completed/success)
+            printf '  CI is green on %s -- allowing push to %s.\n' \
+                "$(printf '%s' "$local_sha" | cut -c1-8)" "$PROTECTED"
+            ;;
+        ""|none/none)
+            # The overwhelmingly common case: a commit made straight on master
+            # that has never been pushed anywhere, so CI has never seen it.
+            fail "no CI run for this commit" \
+                "$(printf '%s' "$local_sha" | cut -c1-8) has never been built. Push it to a branch first:" \
+                "" \
+                "    git switch -c <name> && git push -u $REMOTE_NAME <name>" \
+                "" \
+                "then, once CI is green, fast-forward master onto that same SHA" \
+                "(git merge --ff-only) and push again."
+            ;;
+        completed/*)
+            fail "CI failed on this commit" \
+                "The $WORKFLOW run for $(printf '%s' "$local_sha" | cut -c1-8) finished as: ${result#completed/}" \
+                "" \
+                "    gh run list --commit $local_sha"
+            ;;
+        *)
+            fail "CI has not finished" \
+                "The $WORKFLOW run for $(printf '%s' "$local_sha" | cut -c1-8) is currently: $result" \
+                "" \
+                "    gh run watch \$(gh run list --commit $local_sha --limit 1 --json databaseId -q '.[0].databaseId')"
+            ;;
+    esac
+done
+
+exit 0

@@ -1,0 +1,160 @@
+MscsUnitTests
+Copyright 2026 Khrustal & Mann
+             MELBOURNE, VICTORIA, AUSTRALIA, 3000
+
+This product includes software developed by Khrustal & Mann.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file in
+this directory, or http://www.apache.org/licenses/LICENSE-2.0
+
+This repository is the test suite for Msgcore and TargetCore. It contains no
+library code of its own, and it cannot be built on its own -- see the
+"Components required at build time" section below, which is not a formality
+here: three of the components named there have no public remote at all.
+
+
+-------------------------------------------------------------------------
+Attribution
+-------------------------------------------------------------------------
+
+Every file in this repository is the work of Khrustal & Mann, unlike the two
+libraries it tests -- Msgcore and TargetCore are jointly attributed to Ivyware
+Pty Ltd and Khrustal & Mann, because they carry Ivyware code dating to 2000.
+Nothing of that lineage is reproduced here.
+
+One qualification, recorded because the opposite assumption is the natural one.
+The Msgcore suite exercises the same library surface that the older, ad-hoc
+smoke program MsgcoreTests/MsgcoreTests.cpp touched, and its case list was
+informed by that program. It is not a copy of it: MsgcoreTests.cpp is 434 lines
+of unasserted console output and carries no copyright notice of its own;
+MsgcoreSuite.cpp is 1224 lines of named, asserted cases. The attribution above
+reflects that, and follows the same reading applied in _TargetCore_UseExamples,
+whose harnesses have the same relationship to their Ivyware-era ancestors.
+
+
+-------------------------------------------------------------------------
+Files that carry no licence header
+-------------------------------------------------------------------------
+
+The reason in each case is mechanical rather than legal. All of these ARE
+covered by the Apache License, Version 2.0:
+
+    golden_ref.p2p              A serialised P2Pmsg heap image -- binary, and
+                                the byte-identical cross-OS reference that the
+                                golden_utf16_bytes test compares against with
+                                cmake -E compare_files. Any header text would
+                                be part of the comparison and would fail it.
+                                Marked `binary` in .gitattributes for the
+                                related reason (EOL translation would corrupt
+                                it on checkout).
+
+    .gitattributes              Git configuration, consumed by Git's own
+    .gitignore                  parsers; carried without headers here as in the
+                                sibling repositories.
+
+Note on vectors/*.vec. These DO carry a short notice, but it is written by the
+emitter (seal_interop.cpp, the `emit` mode) rather than added to the files by
+hand. They are regenerated on each backend -- Windows CNG and Linux OpenSSL --
+so a notice edited into a checked-in vector is erased the next time that vector
+is refreshed, without anybody having touched the file. The emitted form is the
+short one because the vector is data, and because its reader (ReadVector, at
+seal_interop.cpp:185) skips '#' lines wholesale.
+
+
+-------------------------------------------------------------------------
+Not wizard-generated, unlike their counterparts in the sibling repositories
+-------------------------------------------------------------------------
+
+Msgcore/NOTICE and TargetCore/NOTICE each carry a list of Microsoft project-
+template and wizard-generated files that remain subject to Microsoft's terms.
+This repository has no such list, and the absence is deliberate rather than an
+omission. The files that would be on it are hand-authored here:
+
+    Targetver.h                 Four lines: #pragma once and a single
+                                #include <SDKDDKVer.h>. It is NOT the MFC
+                                sample-source Targetver.h, which carries
+                                "Copyright (C) Microsoft Corporation" and is
+                                listed as an exception in the sibling NOTICEs.
+
+    stdafx.h / stdafx.cpp       Written to mirror the include surface of the
+                                shipped MSCS sample harnesses, not emitted by
+                                the Visual Studio project wizard.
+
+    MscsUnitTests(2022).vcxproj Hand-authored MSBuild and solution files
+    MscsUnitTests(2022).sln     (one configuration, Debug|x64, and a
+                                PreBuildEvent this repository added).
+
+
+-------------------------------------------------------------------------
+Components required at build time -- none of them bundled here
+-------------------------------------------------------------------------
+
+This suite links, includes, or compiles source from the following. No copy of
+any of them is contained in this repository:
+
+    Msgcore                     Apache License, Version 2.0.
+    TargetCore                  Copyright 2000-2026 Ivyware Pty Ltd,
+                                Khrustal & Mann. The two libraries under test;
+                                each carries its own LICENSE and NOTICE.
+
+    Platform                    The p2pplatform shim (IOCP / io_uring, the
+                                string ring, P2PWCHAR). Part of the MSCS
+                                solution; it has no public remote.
+
+    MsgcoreMFC                  *** COMPILED IN, AND NOT APACHE-LICENSED. ***
+                                On Windows, unit_suite compiles two source
+                                files from this sibling directly into the test
+                                executable -- COleTime_Ext.cpp and
+                                CTime_Ext.cpp -- for the DATE-normalisation
+                                helpers, rather than building the whole MFC UI
+                                toolkit to link them.
+
+                                Both files carry Ivyware Pty Ltd's older
+                                permission-grant notice ("Beta release only",
+                                Copyright(c) Ivyware Pty Ltd 2014 and 2006
+                                respectively, all rights reserved) and have NOT
+                                been relicensed to Apache-2.0 as Msgcore and
+                                TargetCore were. That notice requires that it
+                                appear in all copies and in supporting
+                                documentation; this entry is that
+                                documentation, and the notices in those two
+                                files must not be removed.
+
+                                The Linux build does not compile them: it uses
+                                linux-shim/COleTime_Ext.h instead, which is
+                                this repository's own work.
+
+Two files here are compiled by OTHER repositories rather than by this one, and
+carry their Apache headers with them:
+
+    crypto_kat.cpp              Built by TargetCore/CMakeLists.txt, which
+                                reaches into this directory for it.
+    TestFramework.cpp           Compiled by path into MscsUnitTestsExternal's
+                                runner, so that one framework serves both.
+
+
+-------------------------------------------------------------------------
+Third-party components required at build or run time
+-------------------------------------------------------------------------
+
+Licensed separately, and NOT distributed under the Apache License,
+Version 2.0. These are dependencies, not bundled code:
+
+    Microsoft Foundation Classes (MFC)  - Microsoft, licensed separately. The
+                                          test executables are built against
+                                          the shared MFC runtime, because the
+                                          libraries they link are MFC
+                                          extension DLLs.
+    Microsoft Visual C++ runtime        - Microsoft, licensed separately.
+                                          (mfc140u, msvcp140, vcruntime140,
+                                          ucrtbase)
+    Windows SDK                         - Microsoft, part of the operating
+                                          system. (ws2_32, MsWsock, Propsys,
+                                          and the COM support runtime
+                                          comsuppw / comsuppwd)
+
+The Linux build additionally uses:
+
+    OpenSSL 3 (libcrypto)               - Apache License 2.0. The crypto_kat
+                                          known-answer tests link it directly.
+    liburing                            - LGPL-2.1 / MIT dual licence.

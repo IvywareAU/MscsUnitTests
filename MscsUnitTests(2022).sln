@@ -1,0 +1,22 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+# Copyright © 2026 Khrustal & Mann
+#              MELBOURNE, VICTORIA, AUSTRALIA, 3000
+# Licensed under the Apache License, Version 2.0. See LICENSE for the full text.
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MscsUnitTests", "MscsUnitTests(2022).vcxproj", "{7F3C1A2B-9D4E-4C61-8A70-2B5E6F7C8D90}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7F3C1A2B-9D4E-4C61-8A70-2B5E6F7C8D90}.Debug|x64.ActiveCfg = Debug|x64
+		{7F3C1A2B-9D4E-4C61-8A70-2B5E6F7C8D90}.Debug|x64.Build.0 = Debug|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

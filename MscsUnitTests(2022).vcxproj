@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Copyright 2026 Khrustal & Mann
+                MELBOURNE, VICTORIA, AUSTRALIA, 3000
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied. See the License for the specific language governing
+   permissions and limitations under the License.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7F3C1A2B-9D4E-4C61-8A70-2B5E6F7C8D90}</ProjectGuid>
+    <ProjectName>MscsUnitTests</ProjectName>
+    <RootNamespace>MscsUnitTests</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseOfMfc>Dynamic</UseOfMfc>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
+            Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')"
+            Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup Label="UserMacros" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>x64\Debug\</OutDir>
+    <IntDir>x64\Debug\</IntDir>
+    <TargetName>MscsUnitTests</TargetName>
+    <LinkIncremental>true</LinkIncremental>
+  </PropertyGroup>
+
+  <!-- ===== Debug | x64 ===== -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <AdditionalIncludeDirectories>..\Msgcore;..\MsgcoreMFC;..\TargetCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
+      <AdditionalDependencies>Msgcore.lib;MsgcoreMFC.lib;TargetCore.lib;MsWsock.lib;ws2_32.lib;comsuppwd.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\lib\x64\$(Configuration);..\lib\x64;..\lib;..\P2PeerUtilityHubs\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
+    </Link>
+    <PreBuildEvent>
+      <Message>Checking test-suite wiring</Message>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)CheckSuiteWiring.ps1"</Command>
+    </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "..\Msgcore\out\$(Platform)\$(Configuration)\Msgcore.dll" "$(OutDir)"
+if errorlevel 1 echo POSTBUILD ERROR: Msgcore.dll not found in "..\Msgcore\out\$(Platform)\$(Configuration)" -- build Msgcore first. &amp;&amp; exit /b 1
+if exist "..\Msgcore\out\$(Platform)\$(Configuration)\Msgcore.pdb" xcopy /Y /D "..\Msgcore\out\$(Platform)\$(Configuration)\Msgcore.pdb" "$(OutDir)"
+xcopy /Y /D "$(WDMSCS_DEBUG)\MsgcoreMFC.dll" "$(OutDir)"
+xcopy /Y /D "$(WDMSCS_DEBUG)\TargetCore.dll" "$(OutDir)"
+if exist "$(WDMSCS_DEBUG)\TargetCore.pdb" xcopy /Y /D "$(WDMSCS_DEBUG)\TargetCore.pdb" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+
+  <!-- ===== Source files ===== -->
+  <ItemGroup>
+    <ClCompile Include="stdafx.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="TestMain.cpp" />
+    <ClCompile Include="TestFramework.cpp" />
+    <ClCompile Include="MsgcoreSuite.cpp" />
+    <ClCompile Include="MsgcoreCApiSuite.cpp" />
+    <ClCompile Include="TargetCoreSuite.cpp" />
+    <!-- TreeFS core: portable, no MFC/PCH (does not include stdafx.h) -->
+    <!-- Replication (Phase 5): portable, no MFC/PCH -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="stdafx.h" />
+    <ClInclude Include="Targetver.h" />
+    <ClInclude Include="TestFramework.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

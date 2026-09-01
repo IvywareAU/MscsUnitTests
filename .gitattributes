@@ -1,0 +1,19 @@
+# Serialised P2Pmsg heap images are binary — never apply text/EOL normalisation.
+# golden_ref.p2p is the byte-identical cross-OS reference the golden_utf16_bytes
+# ctest cmp's against; CRLF munging would corrupt it and break the guard on checkout.
+*.p2p binary
+
+# The pre-push hook is a /bin/sh script that git itself executes. Checked out
+# with CRLF it dies on "bad interpreter" — and a hook that cannot run is a hook
+# that silently permits every push, which looks exactly like a hook that agreed.
+# check_repo_invariants.py enforces this line's presence for that reason.
+tools/hooks/* text eol=lf
+
+# The ctest harness scripts are /bin/bash scripts that ctest itself executes on
+# Linux. Checked out with CRLF, bash takes the carriage return as part of every
+# command and the script dies in a heap of "command not found" -- which is the
+# same argument the hook line above makes, applied to a GATE rather than to a
+# hook. alex_test failed exactly that way on 2026-08-28, the first time this
+# suite was run on Linux since the script was added, and a gate that cannot run
+# is a gate that reports nothing while looking like one that agreed.
+*.sh text eol=lf

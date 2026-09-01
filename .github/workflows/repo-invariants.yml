@@ -1,0 +1,131 @@
+# Copyright © 2026 Khrustal & Mann
+#              MELBOURNE, VICTORIA, AUSTRALIA, 3000
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied. See the License for the specific language governing
+# permissions and limitations under the License.
+#
+# ---------------------------------------------------------------------------
+# repo invariants -- what MscsUnitTests can verify about itself on GitHub.
+#
+# STATE THE LIMIT FIRST, because this workflow is easy to over-read.
+#
+# This repository IS the MSCS test suite. It cannot be built here. Building it
+# needs Msgcore, TargetCore, Platform, TreeFs, P2PeerUtilityHubs, DspChain and
+# the solution-root CMakeLists.txt; of those, only Msgcore and TargetCore are on
+# GitHub. Platform, P2PeerUtilityHubs and DspChain have no git remote at all,
+# and TreeFs is on a private non-GitHub host. So no job below compiles a
+# translation unit, and no job below runs a test.
+#
+# A job that detected the siblings were absent and exited green would be worse
+# than no workflow, and it is not what this is. Every job here runs to
+# completion and checks something real, or it fails.
+#
+# WHAT IS ACTUALLY CHECKED
+#   invariants    every source is wired into the build; no duplicate ctest
+#                 names; no POST_BUILD copy beside the test exes; the binary
+#                 attribute on golden_ref.p2p; the hook is present and LF; and
+#                 every `security` test declares the verdict it expects.
+#
+#                 That last one is deliberately only half a check here. It
+#                 verifies a STATUS is DECLARED, never that it is TRUE -- this
+#                 job runs no test and could not tell. Comparing the two needs
+#                 a real run and is developer-side:
+#                   ctest ... --output-junit results.xml
+#                   python .github/ci/check_repo_invariants.py \
+#                          --ctest-junit results.xml
+#                 Seven banners announced *** EXPECTED TO FAIL *** for findings
+#                 fixed weeks earlier, while ctest reported 22/22, because
+#                 nothing could contradict them.
+#   suite-wiring  every Run<Name>Suite() in TestMain.cpp is either compiled in
+#                 by the .vcxproj or explicitly opted out. This is the check
+#                 that a5e9195 needed and did not have: UtilHubsSuite.cpp was
+#                 added to the call site and not to the project, and all 193
+#                 cases were dark on Windows for 14 days while CMake stayed
+#                 green.
+#   cmake-parse   CMakeLists.txt generates against stub sibling targets, so a
+#                 test registered against a file nobody added is caught.
+#
+# WHAT IS NOT CHECKED: whether anything compiles, links, runs, or passes.
+# Windows 41/41 and Linux 44/44 are produced by hand on a developer machine.
+# Read a green tick as "the wiring is intact", not "the tests pass".
+# ---------------------------------------------------------------------------
+
+name: repo invariants (suite wiring; nothing is built or run)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  invariants:
+    name: repository invariants (no compiler)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check repository invariants
+        run: python3 .github/ci/check_repo_invariants.py
+
+  suite-wiring:
+    name: every called suite is compiled in (.vcxproj vs TestMain.cpp)
+    # windows-2022, PINNED. Two reasons, and the second is the real one:
+    #
+    #   * windows-latest no longer carries Visual Studio 2022 (found 2026-08-14,
+    #     cmake answered "could not find any instance of Visual Studio"), so
+    #     every Windows job in this solution pins rather than chases the label.
+    #   * This job reads MscsUnitTests(2022).vcxproj, whose ClCompile entries
+    #     include backslash paths like ..\TreeFs\TreeFs.cpp. pwsh runs on the
+    #     Linux runners and the script is mostly text work, so it would probably
+    #     work there -- but "probably" was not established, and this repository
+    #     has already shipped one defect that was invisible on the platform it
+    #     was verified on. Run it where the project file is native.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check suite wiring
+        shell: pwsh
+        run: >
+          ./CheckSuiteWiring.ps1
+          -ProjectDir .
+          -ProjectFile 'MscsUnitTests(2022).vcxproj'
+          -VerboseReport
+
+  cmake-parse:
+    name: CMakeLists.txt generates (stub siblings, configure only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure against stub sibling targets
+        run: cmake -S .github/ci/parse-check -B "${RUNNER_TEMP}/parse-check"
+
+      - name: Read back the registered tests
+        # Generating produces CTestTestfile.cmake, so the ctest registrations can
+        # be listed without building any of them. This is the closest thing to an
+        # inventory that CI can honestly produce, and a sudden drop in the count
+        # is visible in the log.
+        run: |
+          ctest --test-dir "${RUNNER_TEMP}/parse-check" -N
+
+      - name: State what was and was not verified
+        if: always()
+        run: |
+          echo "Configured and generated only. No compiler was invoked on any"
+          echo "test source, and no test was executed. If someone adds"
+          echo "'cmake --build' to this job it will fail at the first #include"
+          echo "of P2Pmsg.h, because the sibling targets are stubs."
