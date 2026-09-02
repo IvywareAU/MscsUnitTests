@@ -1500,7 +1500,20 @@ set_tests_properties(p2p_confchannel PROPERTIES
 #
 #   Windows  7082   measured 2026-08-18, Debug (was 7,893 on 2026-08-14)
 #   Linux     796   measured 2026-08-18, gcc Debug; message=136 vs Windows 315
-#   both         0  measured 2026-08-21
+#   both         0  measured 2026-08-21, over 3,618 inputs -- ONE REGISTERED RUN
+#   both         0  measured 2026-09-02, over 976,860 inputs / 270 rounds / 902 s
+#
+# AND A BASELINE IS ONLY GOOD FOR THE CAMPAIGN LENGTH IT WAS MEASURED OVER,
+# which is why those two rows now carry one. The 2026-08-21 zero was honest and
+# it was also misleading, and both at once: on 2026-09-01 a 116-round campaign
+# tripped 243 asserts, ALL AT ONE SITE (Msgcore/P2PmsgVBLock.cpp:1004), reached
+# about once in 1,700 pre-auth framing inputs. A 3,618-input run expects about
+# two of those and saw none, so "the assert population is closed" was a true
+# statement about 3,618 inputs and a false one about the code. The defect is
+# fixed (Msgcore, 2026-09-02) and the row above is the re-measurement -- but the
+# lesson outlives it: THE NUMBER OF INPUTS IS PART OF THE CLAIM. A zero quoted
+# without one is a zero of unknown strength, and this comment spent eleven days
+# being read as the strong kind.
 #
 # RAISING A BASELINE TO CLEAR A RED IS THE ONE THING THIS MUST NOT BE USED FOR,
 # and with the baseline at 0 that is the only direction left to raise it in. If
