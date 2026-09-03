@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 //
-// golden_utf16.cpp — UTF-16 pinning golden test (LinuxPortPlan.md §4.2 / LinuxPort_UTF16Audit.md)
+// golden_utf16.cpp — UTF-16 pinning golden test (the Linux port plan §4.2 / the Linux UTF-16 audit)
 //
 // Builds a DETERMINISTIC IOMAGE-backed store with wide names + int cells, saves it
 // to argv[1], reloads it, and verifies the values round-trip. Prints the on-disk
