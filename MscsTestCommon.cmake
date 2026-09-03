@@ -41,9 +41,9 @@ set(_mut_includes
     ${_mscs_tests_root}
     ${_mscs_tests_root}/../Msgcore
     ${_mscs_tests_root}/../TargetCore
-    ${_mscs_tests_root}/../Platform)
+    ${_mscs_tests_root}/../Msgcore/Platform)
 if(NOT WIN32)
-    list(APPEND _mut_includes ${_mscs_tests_root}/../Platform/win-compat)
+    list(APPEND _mut_includes ${_mscs_tests_root}/../Msgcore/Platform/win-compat)
 endif()
 
 # Common compile shape for a legacy-header-consuming harness.

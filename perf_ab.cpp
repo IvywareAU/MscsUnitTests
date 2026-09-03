@@ -36,7 +36,7 @@
 //
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
-//       -I../Platform -I../Platform/win-compat perf_ab.cpp \
+//       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat perf_ab.cpp \
 //       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
 //       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o perf_ab
 

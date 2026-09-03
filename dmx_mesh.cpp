@@ -29,7 +29,7 @@
 // Verdict = process EXIT CODE:  0 SUCCESS | 3 TIMEOUT | 1 SETUP.
 //
 // Build (Linux):
-//   g++ -std=c++23 -fpermissive -I../Msgcore -I../Platform -I../Platform/win-compat \
+//   g++ -std=c++23 -fpermissive -I../Msgcore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat \
 //       dmx_mesh.cpp -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore \
 //       -luring -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o dmx_mesh
 

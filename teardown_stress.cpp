@@ -84,7 +84,7 @@
 //
 // Build (Linux, plain):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
-//       -I../Platform -I../Platform/win-compat teardown_stress.cpp \
+//       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat teardown_stress.cpp \
 //       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
 //       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o teardown_stress
 // Under ASan/TSan: run_sanitizers.sh rebuilds the libs + harness with -fsanitize.

@@ -864,7 +864,7 @@ set_tests_properties(p2p_listenscope PROPERTIES
 # that had the defect.
 #
 # THE PARSER THIS EXERCISES DID NOT COMPILE ON LINUX until 2026-08-28. It was
-# written against CStringA::Find/Mid/Left/Trim/operator[] and ../Platform's
+# written against CStringA::Find/Mid/Left/Trim/operator[] and ../Msgcore/Platform's
 # CStringA carries none of them, so P2PeerConWsa.cpp - the whole transport -
 # failed to build there from the day this gate landed. Nothing built that file
 # on Linux in between. It now parses from a plain char buffer and needs no

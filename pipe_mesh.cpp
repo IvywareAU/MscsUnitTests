@@ -32,7 +32,7 @@
 //
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
-//       -I../Platform -I../Platform/win-compat pipe_mesh.cpp \
+//       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat pipe_mesh.cpp \
 //       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
 //       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o pipe_mesh
 

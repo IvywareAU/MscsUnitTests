@@ -22,8 +22,8 @@
 // and Linux — cross-check by diffing the two platforms' output files, or comparing
 // the printed size + an external hash (sha256sum / certutil).
 //
-// Build (Linux):  g++ -std=c++23 -fpermissive -I../Msgcore -I../Platform \
-//                     -I../Platform/win-compat golden_utf16.cpp \
+// Build (Linux):  g++ -std=c++23 -fpermissive -I../Msgcore -I../Msgcore/Platform \
+//                     -I../Msgcore/Platform/win-compat golden_utf16.cpp \
 //                     -L../Msgcore -lmsgcore -Wl,-rpath,../Msgcore -o golden_utf16
 
 #include "stdafx.h"

@@ -30,7 +30,7 @@
 // immediately, before the following _u8 call.
 //
 // Build (Linux):
-//   g++ -std=c++23 -I../TargetCore -I../Platform p2p_u8_smoke.cpp \
+//   g++ -std=c++23 -I../TargetCore -I../Msgcore/Platform p2p_u8_smoke.cpp \
 //       -L../build/TargetCore -ltargetcore -Wl,-rpath,../build/TargetCore -o p2p_u8_smoke
 
 #include "TargetCore_c.h"

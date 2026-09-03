@@ -30,7 +30,7 @@
 //
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
-//       -I../Platform -I../Platform/win-compat wsa_mesh.cpp \
+//       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat wsa_mesh.cpp \
 //       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
 //       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o wsa_mesh
 

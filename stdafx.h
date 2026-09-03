@@ -44,7 +44,11 @@
 // stdafx.h does, or headers like P2PmsgVBLock.h fail to compile (undefined
 // P2PWCHAR). On _WIN32 platform.h is pure pass-through, so this is a no-op for the
 // Windows build beyond making that typedef visible.
-#include "../Platform/platform.h"
+//
+// The shim layer lives in the Msgcore repository, at Msgcore/Platform/. It was a
+// repository of its own until 2026-09-03; that one is retired, and this is the only
+// copy in the tree.
+#include "../Msgcore/Platform/platform.h"
 
 #include <WinSock2.h>
 #include <mswsock.h>
