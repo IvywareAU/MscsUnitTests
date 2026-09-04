@@ -1526,6 +1526,46 @@ set_tests_properties(p2p_linkcost PROPERTIES
     TIMEOUT 900
     LABELS measure)
 
+# p2p_e2ewaive: securityRevision.md §6.3 - the END-TO-END waiver, which is the
+# switch p2p_linkcost's measurement was taken to decide. §6.2 (SetLinkPolicy)
+# recovers ~0 per message because the two end-to-end protections are not
+# properties of a link; this is the only switch that reaches the 93%.
+#
+# It is also the one setting in the library whose correctness rests on a
+# DEPLOYMENT ASSUMPTION rather than a mechanism - in-process hubs form one
+# address subtree - so the gate cannot assert the assumption and does not
+# pretend to. What it asserts is the two mechanical things around it:
+#
+# Phase 0 is the security-critical one: IsP2PmsgHubInProcess() matches an
+# address EXACTLY. A hub Alice held here says nothing about Alice.Bob, which
+# may be a child hub on another host, and a TRUE for a sub-address would waive
+# the seal on precisely the traffic that leaves the machine. The phase asserts
+# the sub-address, two-levels-below, prefix, sibling, empty and null cases, and
+# that the answer goes back to FALSE when the hub is destroyed.
+#
+# Phases 3 and 4 are the enforcement and they are a PAIR, one switch apart. The
+# observable is DELIVERY, not timing: Alice requires sealing and her allow-list
+# entry for Carol carries an identity and no agreement key, so
+# SealAppMsgOutbound must refuse to send. Waiver off, nothing arrives; waiver
+# on with Carol a hub in this process, the same message arrives.
+#
+# NOT COVERED, and it is in the file's header too: an out-of-process
+# destination behaviourally (it needs a second PROCESS - the whole point of the
+# predicate is that no address this harness can invent distinguishes the two),
+# and the attestation half on the receive side (GateRelayInbound is never
+# reached in a chain, because the relay is a common ancestor of both ends -
+# securityRevision_progress.md finding 11).
+#
+# NO SOCKETS, so no RESOURCE_LOCK and no port. Per-phase hub addresses, which
+# is p2p_linktrust's lesson applied before it could cost anything.
+#   STATUS: see securityRevision_progress.md
+add_executable(p2p_e2ewaive p2p_e2ewaive.cpp)
+_mscs_test_common(p2p_e2ewaive)
+target_link_libraries(p2p_e2ewaive PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_e2ewaive COMMAND p2p_e2ewaive)
+set_tests_properties(p2p_e2ewaive PROPERTIES
+    TIMEOUT 180 LABELS security)
+
 # p2p_fuzzframe: the FUZZ HARNESS for the framing path (Ahtung_Disaster.md,
 # Track B item 5). C1 — the pre-auth heap overflow from an undersized wire
 # length field — lived in P2Peerio::RecvP2PeerMsg stage 2, and ONE lower-bound
