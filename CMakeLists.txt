@@ -1472,7 +1472,23 @@ set_tests_properties(p2p_confchannel PROPERTIES
 # NOT WILL_FAIL: it asserts the behaviour steps 1-4 give. All nine phases of
 # securityRevision.md §8.3 are covered; §8.4's measurement (step 5) is
 # p2p_linkcost, below, and is not a gate test.
-#   STATUS: see securityRevision_progress.md
+#
+#   STATUS: PASSES
+#
+# READ THAT AS "the verdict this test gives WHEN IT REACHES ONE", because this
+# one needs the qualification and the others do not. It inherits an OPEN defect
+# it did not cause -- incidental finding 7 in TargetCore's
+# securityRevision_progress.md -- which kills the process in a live TCP phase,
+# intermittently, at a rate measured as high as one run in two on one machine.
+# It was re-measured on the baseline commit with this pass's work stashed and it
+# fires there too, in phases this work does not touch; it is in the connection
+# registry / hub teardown path.
+#
+# So a red run here is READ, not believed: a run that printed a RESULT: line is
+# a real verdict and the line above is what it should say, a run that printed
+# *** TERMINATE is finding 7, and a run that stopped mid-phase with neither is
+# finding 7 on a build predating the report hook. The evidence, and the three
+# questions closing it wants answered, are under "The flake" in that file.
 add_executable(p2p_linktrust p2p_linktrust.cpp)
 _mscs_test_common(p2p_linktrust)
 target_link_libraries(p2p_linktrust PRIVATE targetcore msgcore p2pplatform)
@@ -1558,7 +1574,11 @@ set_tests_properties(p2p_linkcost PROPERTIES
 #
 # NO SOCKETS, so no RESOURCE_LOCK and no port. Per-phase hub addresses, which
 # is p2p_linktrust's lesson applied before it could cost anything.
-#   STATUS: see securityRevision_progress.md
+#
+# No sockets is also why this one carries no qualification where p2p_linktrust
+# carries a long one: finding 7 lives in the live TCP path, and this test never
+# enters it.
+#   STATUS: PASSES
 add_executable(p2p_e2ewaive p2p_e2ewaive.cpp)
 _mscs_test_common(p2p_e2ewaive)
 target_link_libraries(p2p_e2ewaive PRIVATE targetcore msgcore p2pplatform)
