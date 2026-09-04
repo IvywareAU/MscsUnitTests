@@ -64,47 +64,24 @@ function(_mscs_test_common name)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Runtime loader path — for EVERY test registered in the CALLING directory.
+# _mscs_apply_loader_path() WAS DEFINED HERE AND IS NOW DEFINED IN THE ROOT
+# CMakeLists.txt (2026-09-04). Nothing that called it needs to change: it is the
+# same name and the same behaviour, and a function defined at the root is visible
+# in every directory added below it.
 #
-# msgcore and targetcore are the only SHARED targets involved, and this tree sets
-# no unified CMAKE_RUNTIME_OUTPUT_DIRECTORY, so each lands in its own per-target
-# build directory and never beside the test exe. A ctest run therefore only
-# worked if the CALLER put those directories on the loader path first: a bare
-# `ctest` came back with ELEVEN tests failing at 0xc0000135 (STATUS_DLL_NOT_FOUND),
-# which looks exactly like a code regression and is not one.
+# It moved because THIS file is the wrong place for it and the second occurrence
+# of the bug proved it. The loader path is needed by every directory that
+# registers a test linking msgcore or targetcore; this file is included by
+# MscsUnitTests and MscsUnitTestsExternal and by nothing else, because P2PeerWeb
+# is its own component repository, is added BEFORE MscsUnitTests, and is guarded
+# only by its own existence -- so it cannot include a file that may not be in the
+# checkout, and it therefore had no loader path at all. All eleven p2pweb_w*
+# tests were failing under a bare `ctest` at 0xc0000135, which is the same
+# eleven-test, same-status-code failure the note that used to sit here recorded
+# from 2026-08-13, in a second directory. The fix was shared; the place to put it
+# was not.
 #
-# Two things this has to get right:
-#   * MULTI-CONFIG. The Visual Studio generator appends $<CONFIG> to the output
-#     directory and that is not known at configure time, so the value must be the
-#     generator expression $<TARGET_FILE_DIR:...> — never a literal "Debug".
-#   * The VARIABLE NAME is per-platform: PATH on Windows, LD_LIBRARY_PATH on Linux.
-#     Linux already resolves the .so through the build-tree RPATH, so it is
-#     belt-and-braces there — it is what would notice if RPATH were ever disabled.
-#
-# WHAT DEFEATS ALL OF THIS, and did (2026-08-13): a COPY of msgcore.dll or
-# targetcore.dll left sitting in the test exes' own output directory. Windows
-# searches the application directory BEFORE it looks at PATH, so such a copy wins
-# over the entry prepended here and every test in the directory silently runs
-# against it. Two stale copies were found next to the exes and deleted; while they
-# were there a rebuilt library was NOT what ctest exercised, and a fix could be
-# verified green without ever having been loaded. Nothing here puts them there —
-# do not add a POST_BUILD copy step to "help". If a test needs a DLL, this loader
-# path is the mechanism; a copy beside the exe is a stale result waiting to
-# happen. check_repo_invariants.py fails the build if a POST_BUILD step appears.
-#
-# Call this ONCE, at the END of the including CMakeLists.txt: it reads the
-# directory's accumulated TESTS property, so a new add_test() is covered
-# automatically instead of failing the day somebody forgets the boilerplate.
+# The full rationale -- multi-config genex, the per-platform variable name, and
+# the stale-DLL-beside-the-exe trap that defeats all of it -- moved with the
+# function and is at the root. Read it there before changing either.
 # ---------------------------------------------------------------------------
-function(_mscs_apply_loader_path)
-    if(WIN32)
-        set(_ldvar PATH)
-    else()
-        set(_ldvar LD_LIBRARY_PATH)
-    endif()
-    get_property(_tests DIRECTORY PROPERTY TESTS)
-    if(_tests)
-        set_tests_properties(${_tests} PROPERTIES ENVIRONMENT_MODIFICATION
-            "${_ldvar}=path_list_prepend:$<TARGET_FILE_DIR:msgcore>;${_ldvar}=path_list_prepend:$<TARGET_FILE_DIR:targetcore>")
-    endif()
-endfunction()
