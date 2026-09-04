@@ -26,9 +26,10 @@
 # that builds the real suite is not merely unwritten, it is not currently
 # possible. See tools/hooks/README.md.
 #
-# This file supplies the two things the subdirectory script assumes -- a project
-# context and the four target names -- and NOTHING ELSE, so that CI can at least
-# run the real CMakeLists.txt through CMake's parser and generator.
+# This file supplies the three things the subdirectory script assumes of its
+# parent -- a project context, the sibling library target names, and the
+# _mscs_apply_loader_path() function -- and NOTHING ELSE, so that CI can at
+# least run the real CMakeLists.txt through CMake's parser and generator.
 #
 # WHAT CONFIGURING THIS PROVES
 #   * ../../../CMakeLists.txt is syntactically valid CMake, and every command
@@ -89,5 +90,30 @@ foreach(_stub msgcore targetcore p2pplatform)
 endforeach()
 
 enable_testing()
+
+# The third thing the subdirectory script assumes of its parent, and the newest.
+# ../../../CMakeLists.txt ends with a call to _mscs_apply_loader_path(), which
+# puts the sibling DLL/.so directories on each registered test's PATH. That
+# function moved to the MSCS solution root on 2026-09-04 -- deliberately, because
+# it is needed by every directory that registers a test against msgcore or
+# targetcore and P2PeerWeb could not reach the file it used to live in. The root
+# is not part of THIS repository, so without the stub below CMake stops at
+# "Unknown CMake command" and nothing downstream of it is parsed at all.
+#
+# A NO-OP IS THE HONEST STUB HERE, and the reason is the reason parse-check
+# exists: this job stops after generate and runs no test, so a test environment
+# it never reads is not a thing this file can be wrong about. Copying the real
+# body would be worse -- two definitions that can drift, with CI checking the
+# copy and every build using the original.
+#
+# WHAT THIS COSTS, stated so nobody reads the tick as wider than it is: the real
+# function's own generate-time behaviour -- the $<TARGET_FILE_DIR:...> genex, the
+# per-platform variable, its refusal when msgcore/targetcore are absent -- is NOT
+# exercised by this job, and cannot be until the solution root is reachable from
+# CI. What IS still proved is everything above the call: the subdirectory script
+# parses and generates to the end, and the call site itself is syntactically
+# reached.
+function(_mscs_apply_loader_path)
+endfunction()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../.. MscsUnitTests)
