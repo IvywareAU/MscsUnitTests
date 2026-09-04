@@ -1390,6 +1390,142 @@ add_test(NAME p2p_confchannel COMMAND p2p_confchannel 7840)
 set_tests_properties(p2p_confchannel PROPERTIES
     TIMEOUT 180 RESOURCE_LOCK loopback_7840 LABELS security)
 
+# p2p_linktrust: is what a link may SKIP decided by what its transport can
+# VOUCH FOR, and does a relaxation stay inside the class it was granted to?
+# TargetCore securityRevision.md §8.2 steps 1-4, and the gate for them.
+#
+# Every security switch in the tree was a property of the HUB, so a DMX
+# connection - a pointer handoff between two objects on one heap - ran a full
+# ECDH agreement, held a BCrypt key object P2PeerioDmx never consults, and put
+# four ECDSA operations on its login, to protect a channel with no wire. The
+# only way to say otherwise was RequireAuth(false), which opens EVERY link the
+# hub will ever hold. The fix splits the question: the transport declares a
+# trust class (a fact, a virtual, nothing AcceptSpawn can drop), the hub keeps
+# the policy per class, and P2PeerConTrust_Wire cannot be opened at all.
+#
+# Eleven phases. Phase 0 is in-process and asserts what each connection class
+# DECLARES, because the gate reads exactly those answers - and the demotion
+# algebra beside it, because "tightens only" is the property that makes an
+# operator override safe to have. Phases 1 and 4 are the DMX and TCP positive
+# controls. Phase 2 is the feature. Phase 3 is the F-S6-1 regression - the two
+# ends reading different halves of one switch - and is the phase that was
+# written first.
+#
+# Phases 5 and 6 are a pair and 6 is the reason the pair exists: 6 is 5 plus
+# ONE call, DemoteTrust(Wire) on the service before it is posted, and it fails
+# unless AcceptSpawn carried that ceiling to the accepted child. That single
+# copied field is the one line in the whole feature a maintainer can forget,
+# and phase 5 is what makes 6's refusal attributable to it rather than to a
+# transport that stopped working.
+#
+# Phases 7 and 8 are step 3 and neither dials anything. 7 offers a fenced hub a
+# Wire socket, a Local socket and a DMX connection and reads three return values
+# out of PostP2PeerCon, then offers the same Wire socket to a hub that differs
+# by the single RequireTrustAtLeast call - without that control the refusals are
+# not attributable to the fence. 8 walks an entirely UNPROVISIONED hub through
+# six combinations of fence and per-class policy: it must arm, as
+# ArmNotRequiredByPolicy, exactly when it has a fence AND every class at or
+# above that fence is open, and its last reading is the one that catches the
+# wrong implementation - both relaxable classes open with NO fence must still
+# refuse, because a socket can still be posted to a hub that has not fenced one
+# out.
+#
+# Phases 9 and 10 are step 4 and they are LIVE: a real named pipe, dialled, with
+# the class read off the connection that holds the handle rather than off a
+# setting. 9 leaves the service at its new default and the accepted child must
+# read Local - which is what pins the derivation, since m_bPipeLocal is computed
+# back out of the pipe mode and the security attributes CreateNamedPipe was
+# actually given, so deleting either PIPE_REJECT_REMOTE_CLIENTS or the explicit
+# descriptor reddens it. 10 asks for P2PeerConPipeAccess_Legacy - the
+# pre-revision call, byte for byte, kept reachable because a deployment sharing
+# a pipe between two accounts must be able to keep working - and that pipe must
+# read Wire and authenticate in full even though its hub opened the Local class.
+# That is securityRevision.md §8.3's phase 6, and it is a live phase now rather
+# than a row in phase 0.
+#
+# NO PORT AND NO RESOURCE_LOCK FOR THE PIPE PHASES, because a pipe name is not a
+# port: it is machine-wide, so the test builds \\.\pipe\p2p_linktrust_<pid>_<n>
+# and carries the only thing ctest guarantees is distinct between two concurrent
+# copies of a suite. Adding it to the lock list would say something untrue about
+# what the lock protects.
+#
+# SIX consecutive ports and not three. Three are dialled, one per live TCP
+# phase, so a phase that leaves a socket in TIME_WAIT cannot make the next one
+# look like a refusal. The other three belong to phase 7 and only one of them is
+# ever bound - the two the fence refuses never reach a socket - but they are
+# locked anyway, because a port this test names and a port this test binds have
+# to be the same list or the next person to add a phase will find out which by
+# a flake. A HUB ADDRESS PER PHASE for the same reason one level up: the phases
+# each build and tear down hubs, and reusing addresses made every phase depend
+# on the previous one's deregistration having completed in the process-wide
+# registry. That cost a flake -- one failure in a full ctest run whose wall time
+# was 40% above the run before it, and none in isolation -- before the addresses
+# were split. The sleep that used to stand in for it is still there and is no
+# longer what the test rests on.
+#
+# TIMEOUT 720 and not 240: the positive controls wait 30 s each because a
+# control that times out reports a failure of the thing under test, and this
+# runs beside thirty-six other suites on a machine whose load it does not
+# control. The worst-case sum of the phase waits is ~240 s with the two pipe
+# phases added; phases 7 and 8 add no waits, only four hub spawns.
+#
+# NOT WILL_FAIL: it asserts the behaviour steps 1-4 give. All nine phases of
+# securityRevision.md §8.3 are covered; §8.4's measurement (step 5) is
+# p2p_linkcost, below, and is not a gate test.
+#   STATUS: see securityRevision_progress.md
+add_executable(p2p_linktrust p2p_linktrust.cpp)
+_mscs_test_common(p2p_linktrust)
+target_link_libraries(p2p_linktrust PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_linktrust COMMAND p2p_linktrust 7853)
+set_tests_properties(p2p_linktrust PROPERTIES
+    TIMEOUT 720
+    RESOURCE_LOCK "loopback_7853;loopback_7854;loopback_7855;loopback_7856;loopback_7857;loopback_7858"
+    LABELS security)
+
+# p2p_linkcost: what does a POSTURE cost a message? securityRevision.md §8.4,
+# which is §8.2 step 5, and it is a MEASUREMENT and not a gate.
+#
+# §8.4 asked for one run of dmx_mesh extended to three in-process hubs in a
+# chain, N messages of a fixed size, under four postures - everything off,
+# RequireAuth only, plus attestation, plus seal - reporting messages per second
+# and CPU time per message. It exists because nothing in the tree times the
+# security path: §3's figures are OPERATION COUNTS, and the §6.3 end-to-end
+# waiver was explicitly deferred until there were numbers to decide it on.
+#
+# A FIFTH POSTURE was added and could not have been asked for before step 2:
+# the default posture with SetLinkPolicy(InProcess, Open) on all three hubs.
+# That is what §6.2 already ships, so it separates the cost §6.2 has ALREADY
+# recovered from the cost only §6.3 could - which is §8.4's own closing
+# question, "or whether §6.2 alone recovers what matters".
+#
+# NO TIMING ASSERTION, AND THAT IS DELIBERATE. A messages-per-second threshold
+# in ctest is a flake on a build machine whose load this suite does not control,
+# and this harness exists to produce a number for a document to argue over. The
+# verdict is DELIVERY: exit 3 if any posture failed to deliver every message
+# within its timeout, because a posture that quietly dropped its traffic would
+# otherwise post the best throughput in the table.
+#
+# NO PORT AND NO RESOURCE_LOCK: every link is P2PeerConDmx - a pointer handoff
+# between two objects on one heap. There is no socket, no pipe and no OS handle
+# on the path, which is also the reason this is the right shape to measure: §6.3
+# is about a destination in THIS PROCESS, so any cost measured here is paid for
+# a threat that has no way in. A HUB ADDRESS AND A DMX SERVICE NAME PER POSTURE,
+# for the reason spelled out above p2p_linktrust: the postures each stand three
+# hubs up and tear them down, and both registries they use are process-wide.
+#
+# TIMEOUT 900. Five postures at N=4000, and the two that seal do public-key work
+# per message in both directions; the primitives pass adds four more loops. The
+# default N is small enough to keep a ctest run honest and can be raised on the
+# command line when the numbers themselves are the point:
+#   p2p_linkcost 20000 1024
+add_executable(p2p_linkcost p2p_linkcost.cpp)
+_mscs_test_common(p2p_linkcost)
+target_link_libraries(p2p_linkcost PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_linkcost COMMAND p2p_linkcost)
+set_tests_properties(p2p_linkcost PROPERTIES
+    TIMEOUT 900
+    LABELS measure)
+
 # p2p_fuzzframe: the FUZZ HARNESS for the framing path (Ahtung_Disaster.md,
 # Track B item 5). C1 — the pre-auth heap overflow from an undersized wire
 # length field — lived in P2Peerio::RecvP2PeerMsg stage 2, and ONE lower-bound
