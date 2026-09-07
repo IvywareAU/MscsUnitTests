@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+`README.md` covers the same ground for a human arriving at the repository, and states the
+counts with the date they were measured. Where the two disagree, re-derive from the tree —
+this file carried a 119-case count and an 11-entry port table for weeks after both were wrong.
+
 ## What this repository is
 
 `MscsUnitTests` is the **test suite** for the Msgcore and TargetCore libraries of the MSCS
@@ -93,7 +97,8 @@ fast-forward-only and refuses any SHA that has not gone green in the workflow.
 ### The runner (`unit_suite`)
 
 - `TestMain.cpp` — entry point; calls `RunMsgcoreSuite()`, `RunMsgcoreCApiSuite()`,
-  `RunTargetCoreSuite()`. 119 cases.
+  `RunTargetCoreSuite()`. **125 cases** (70 Msgcore, 19 Msgcore C-API, 36 TargetCore),
+  counted 2026-09-08. It was 119 until then; recount rather than trust this line.
 - `TestFramework.cpp/.h` — `TF_CASE` / `TF_CHECK` / `TF_CHECK_EQ`, plus the process-wide
   lifecycle: one `CWinApp` (MFC allows exactly one per exe), `StartupP2Pmsg`/`CleanupP2Pmsg`,
   Winsock, and an assert hook that folds a CRT/MFC ASSERT into a recorded failure instead of a
@@ -118,9 +123,13 @@ Conventions across them:
   them with `-LE security`.
 - Every `security` test declares its expected verdict in its `CMakeLists.txt` banner:
   `#   STATUS: PASSES` or `#   STATUS: EXPECTED-FAIL`. This is enforced — see
-  "Repo self-checks" above. **Measured 2026-08-14, Windows Debug: 21/22, and the one red is
-  `p2p_fuzzframe` by design** (9 `PASSES`, 1 `EXPECTED-FAIL`). When you change a test's
-  verdict, change its `STATUS` in the same commit and say what closed it.
+  "Repo self-checks" above. **As of 2026-09-08 there are 37 `security` tests and all 37
+  declare `STATUS: PASSES` — 0 `EXPECTED-FAIL`.** `p2p_fuzzframe` was the standing exception
+  and no longer is: its banner reads `PASSES CLEAN`, measured 2026-08-21 on Windows Debug +
+  Release, having been `PASSES-WITHIN-BUDGET` and `EXPECTED-FAIL` before that. Those are
+  *declarations*, not a run — `check_repo_invariants.py --ctest-junit` is what compares them
+  against one. When you change a test's verdict, change its `STATUS` in the same commit and
+  say what closed it.
 - `p2p_fuzzframe` is registered **with `--strict-assert`**, which promotes a tripped ASSERT
   from a printed diagnostic to a verdict. Without it the harness exits 0 having tripped ~7,900
   asserts — each one wire data violating an invariant the code believes, reached pre-auth —
@@ -132,10 +141,36 @@ Conventions across them:
   behaviour that a tree which has not opted in still gets. Four hubs, because a message can
   only arrive from outside its parent's subtree honestly if the parent got it from ITS parent.
 - Each socket harness takes its port as argv[1] and holds a `RESOURCE_LOCK loopback_<port>`
-  so ctest never runs two on the same port. Allocated: 7811 `alex_test`, 7813 `authgate`,
-  7814 `authspoof`, 7815 `authpsk`, 7816 `authrelay` (+7817 for its server), 7818 `sealhop`,
-  7819 `expreg`, 7820 `authancestor` (+7821 for its interior hub), 7823 `bigreport`,
-  7824 `keyrotate`. Pick an unused one for anything new.
+  so ctest never runs two on the same port. **Allocated, re-derived from `CMakeLists.txt`
+  2026-09-08 — 37 locks, not the 11 this list carried until then:**
+
+  | port | harness | | port | harness |
+  |---|---|---|---|---|
+  | 7811 | `alex_test`      | | 7838 | `p2p_authposture` |
+  | 7813 | `p2p_authgate`   | | 7840 | `p2p_confchannel` |
+  | 7814 | `p2p_authspoof`  | | 7842 | `p2p_conreap` |
+  | 7815 | `p2p_authpsk`    | | 7844 | `p2p_reportsign` |
+  | 7816 | `p2p_authrelay`  | | 7845 | `p2p_reportsign` |
+  | 7818 | `p2p_sealhop`    | | 7846 | `p2p_sealbcast` |
+  | 7819 | `p2p_expreg`     | | 7847 | `p2p_listenscope` |
+  | 7820 | `p2p_authancestor` | | 7848 | `p2p_acceptfilter` |
+  | 7821 | `p2p_authancestor` | | 7849 | `p2p_resolve` |
+  | 7823 | `p2p_bigreport`  | | 7850 | `p2p_ipv6` |
+  | 7824 | `p2p_keyrotate`  | | 7851 | `p2p_ipv6dual` |
+  | 7826 | `p2p_acceptcap`  | | 7852 | `p2p_ipv6filter` |
+  | 7827 | `p2p_logindeadline` | | 7853 | `p2p_linktrust` |
+  | 7828 | `p2p_srcbound`   | | 7854 | `p2p_linktrust` |
+  | 7830 | `p2p_revokedist` | | 7855 | `p2p_linktrust` |
+  | 7833 | `p2p_hubwake`    | | 7856 | `p2p_linktrust` |
+  | 7834 | `p2p_hubsnap`    | | 7857 | `p2p_linktrust` |
+  | 7835 | `p2p_backpressure` | | 7858 | `p2p_linktrust` |
+  | 7836 | `p2p_authchannel`  | | | |
+
+  **Free in range: 7812, 7817, 7822, 7825, 7829, 7831, 7832, 7837, 7839, 7841, 7843**, then
+  7859 up. Take one of those for anything new. Do **not** infer a free port from the end of
+  this table — that is precisely how the old list misled, since it stopped at 7824 while
+  7826–7858 were already taken. Re-derive with
+  `grep -oE "loopback_[0-9]+" CMakeLists.txt | sort -u` rather than trusting the table.
 
 ### Cross-platform shape
 
