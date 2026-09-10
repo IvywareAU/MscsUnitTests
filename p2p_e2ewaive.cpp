@@ -275,7 +275,15 @@ static bool RunChain ( int nIx, bool bWaive, long *pnRecv )
          oMid.SetAllowList ( g_sMidAcl.c_str ( ) ) != p2pcng::IdOk )
     { Log ( "SETUP: middle provisioning failed" ); return false; }
 
-    if ( !oMid.SpawnHub ( ) ) { Log ( "SETUP: middle SpawnHub failed" ); return false; }
+    //  SpawnHub hands back a thread handle the CALLER owns -- TargetCore_c.h
+     //  says so in as many words: "THE HANDLE IS YOURS AND YOU DO NOT NEED IT
+     //  ... ignoring the return value entirely is a leaked thread handle, not
+     //  a leaked thread." Nothing here needs it (CloseHub joins the thread),
+     //  so it is taken only to be given straight back. LSan counted four of
+     //  these, one per SpawnHub in this file.
+    HANDLE hMid = oMid.SpawnHub ( );
+    if ( !hMid ) { Log ( "SETUP: middle SpawnHub failed" ); return false; }
+    CloseHandle ( hMid );
 
     P2PeerConDmx *pSvcA = P2PeerConDmx::ServiceFactory ( kAliceAddr[nIx],
                                                          kSvcAlice[nIx] );
@@ -301,7 +309,9 @@ static bool RunChain ( int nIx, bool bWaive, long *pnRecv )
          oCarol.SetAllowList ( g_sCarolAcl.c_str ( ) ) != p2pcng::IdOk )
     { Log ( "SETUP: Carol provisioning failed" ); return false; }
 
-    if ( !oCarol.SpawnHub ( ) ) { Log ( "SETUP: Carol SpawnHub failed" ); return false; }
+    HANDLE hCarol = oCarol.SpawnHub ( );
+    if ( !hCarol ) { Log ( "SETUP: Carol SpawnHub failed" ); return false; }
+    CloseHandle ( hCarol );
     P2PeerConDmx *pConC = P2PeerConDmx::ClientFactory ( kMidAddr[nIx],
                                                         kSvcCarol[nIx] );
     if ( !pConC ) { Log ( "SETUP: Carol ClientFactory failed" ); return false; }
@@ -326,7 +336,9 @@ static bool RunChain ( int nIx, bool bWaive, long *pnRecv )
     //  THE ONE SWITCH BETWEEN THE TWO RUNS
     oAlice.WaiveEndToEndInProcess ( bWaive );
 
-    if ( !oAlice.SpawnHub ( ) ) { Log ( "SETUP: Alice SpawnHub failed" ); return false; }
+    HANDLE hAlice = oAlice.SpawnHub ( );
+    if ( !hAlice ) { Log ( "SETUP: Alice SpawnHub failed" ); return false; }
+    CloseHandle ( hAlice );
     P2PeerConDmx *pConA = P2PeerConDmx::ClientFactory ( kMidAddr[nIx],
                                                         kSvcAlice[nIx] );
     if ( !pConA ) { Log ( "SETUP: Alice ClientFactory failed" ); return false; }
@@ -382,8 +394,10 @@ int main ( int argc, char *argv[] )
         oSolo.RequireAuth       ( false );
         oSolo.RequireSeal       ( false );
         oSolo.RequireRevocation ( false );
-        if ( !oSolo.SpawnHub ( ) )
+        HANDLE hSolo = oSolo.SpawnHub ( );
+        if ( !hSolo )
         { Log ( "SETUP: solo SpawnHub failed" ); CleanupP2Pmsg ( ); return 2; }
+        CloseHandle ( hSolo );
         Sleep ( 300 );
 
         Check ( IsP2PmsgHubInProcess ( L"Waive.Solo" ) != FALSE,
