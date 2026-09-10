@@ -1709,6 +1709,28 @@ int main ( int argc, char *argv[] )
     }
 
     // ---- Phase 10: the legacy pipe is a wire ------------------------------
+    //  WINDOWS ONLY, and not by omission.  The phase asks whether the legacy
+    //  pipe keeps the class the new default earns, and that question only has
+    //  content where the two calls differ.  On Windows the legacy call is the
+    //  pre-revision CreateNamedPipe byte for byte - no PIPE_REJECT_REMOTE_
+    //  CLIENTS, a NULL descriptor - and the pipe it makes IS reachable over
+    //  SMB from another host, so the child must read Wire.
+    //
+    //  There is no such pipe to reproduce on Linux.  The mapping is socket/
+    //  bind/listen on an AF_UNIX path; neither argument reaches the kernel, so
+    //  neither can be read back, and P2PeerConPipe sets m_bPipeLocal
+    //  unconditionally there - refer its note at the ifdef that sets it.  An
+    //  AF_UNIX endpoint cannot be opened from another machine AT ALL, so the
+    //  class the legacy mode is supposed to lose is one it never had.
+    //
+    //  Running it anyway does not fail honestly, it fails misleadingly: the
+    //  server reads Local and its hub has Local OPEN, the demoted client reads
+    //  Wire and demands the handshake, and the server drops the link with
+    //  "peer opened a key agreement on a link this hub has relaxed".  That is
+    //  the two ends disagreeing about a distinction the platform does not
+    //  draw, reported as a security failure.  Measured on Ubuntu 26.04,
+    //  gcc 15.2, io_uring + OpenSSL.
+#ifdef _WIN32
     if ( nExit == 0 )
     {
         Log ( "--- phase 10: the same pipe asked for P2PeerConPipeAccess_Legacy "
@@ -1756,6 +1778,10 @@ int main ( int argc, char *argv[] )
             nExit = 1;
         }
     }
+#else
+    Log ( "--- phase 10: NOT RUN - a pipe here is AF_UNIX, which no other host "
+          "can open, so the legacy mode has no class to lose ---" );
+#endif
 
     if ( nExit == 0 )
         std::printf (
@@ -1768,8 +1794,18 @@ int main ( int argc, char *argv[] )
           "  it is posted; a hub that has fenced and opened every class it\n"
           "  will carry arms with no key files, while one missing either half of\n"
           "  that still does not; and a named pipe reads Local when this\n"
-          "  transport made it local and Wire when it was asked for the pipe the\n"
-          "  platform used to give it.\n" );
+          "  transport made it local\n"
+#ifdef _WIN32
+          "  and Wire when it was asked for the pipe the platform used to give\n"
+          "  it.\n"
+#else
+          //  Phase 10 did not run here - refer its guard.  A green run on this
+          //  platform says nothing about the legacy pipe, and must not read as
+          //  though it did.
+          "  (the legacy pipe is not covered on this platform - phase 10 does\n"
+          "  not run where a pipe is AF_UNIX).\n"
+#endif
+                     );
 
     ScrubTempFiles ( );
     WSACleanup ( );
