@@ -21,7 +21,7 @@
     TestMain.cpp calls one Run<Name>Suite() per suite.  Each is defined in its
     own <Name>Suite.cpp, which must be listed in the .vcxproj.  Nothing enforced
     that, and on 2026-07-15 commit a5e9195 added UtilHubsSuite.cpp plus its call
-    in TestMain.cpp but never touched MscsUnitTests(2022).vcxproj.  The call
+    in TestMain.cpp but never touched MscsUnitTests(2026).vcxproj.  The call
     compiled, the definition did not, and the whole executable failed to link
     with LNK2019 -- so ALL 193 cases were dark on Windows for 14 days, not just
     the 9 new ones.  The CMake build was unaffected, which is why it went

@@ -80,8 +80,8 @@ omission. The files that would be on it are hand-authored here:
                                 shipped MSCS sample harnesses, not emitted by
                                 the Visual Studio project wizard.
 
-    MscsUnitTests(2022).vcxproj Hand-authored MSBuild and solution files
-    MscsUnitTests(2022).sln     (one configuration, Debug|x64, and a
+    MscsUnitTests(2026).vcxproj Hand-authored MSBuild and solution files
+    MscsUnitTests(2026).sln     (one configuration, Debug|x64, and a
                                 PreBuildEvent this repository added).
 
 

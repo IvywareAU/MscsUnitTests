@@ -134,7 +134,7 @@ The loader path is set centrally instead; the invariants script fails the build 
 `POST_BUILD` step appears.
 
 **Any suite added to `TestMain.cpp` must be added to BOTH `CMakeLists.txt` and
-`MscsUnitTests(2022).vcxproj`.** The `.vcxproj` is an alternative MSBuild path building the
+`MscsUnitTests(2026).vcxproj`.** The `.vcxproj` is an alternative MSBuild path building the
 same suites (Debug|x64, with a PCH). A suite once went into only one of the two, and every
 case in it was dark on Windows for fourteen days.
 
@@ -149,7 +149,7 @@ MscsUnitTests\
 ├── CMakeLists.txt                          registration + the STATUS banners
 ├── MscsTestCommon.cmake                    compile shape, shared with MscsUnitTestsExternal
 ├── CheckSuiteWiring.ps1                    .vcxproj / TestMain.cpp agreement check
-├── MscsUnitTests(2022).sln / .vcxproj      the MSBuild path
+├── MscsUnitTests(2026).sln / .vcxproj      the MSBuild path
 ├── fuzz\        corpus + README            what belongs in the corpus and why
 ├── vectors\     *.vec                      cross-backend sealed vectors (seal_interop)
 ├── tools\hooks\ + README                   pre-push hook, installed per clone

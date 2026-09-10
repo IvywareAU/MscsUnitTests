@@ -21,7 +21,7 @@
 # smokes, the P2PeerService daemon harness, and the UTF-16 golden) under CMake+MSVC, and
 # guards the Linux-transport mesh harnesses (dmx/wsa/pipe/232/mix, which drive io_uring +
 # PTYs) and the bash-script gates (golden_utf16_bytes / alex_test) to Linux. On Windows the
-# authoritative full suite is still the (2022).vcxproj TestMain runner until this path signs off.
+# authoritative full suite is still the (2026).vcxproj TestMain runner until this path signs off.
 #
 # Verdict for every harness = process EXIT CODE: 0 SUCCESS; non-zero = CTest failure.
 

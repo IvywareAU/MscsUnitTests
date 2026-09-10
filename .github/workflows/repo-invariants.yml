@@ -82,18 +82,18 @@ jobs:
 
   suite-wiring:
     name: every called suite is compiled in (.vcxproj vs TestMain.cpp)
-    # windows-2022, PINNED. Two reasons, and the second is the real one:
+    # windows-2025-vs2026, PINNED. Two reasons, and the second is the real one:
     #
-    #   * windows-latest no longer carries Visual Studio 2022 (found 2026-08-14,
+    #   * windows-latest no longer carries Visual Studio 2026 (found 2026-08-14,
     #     cmake answered "could not find any instance of Visual Studio"), so
     #     every Windows job in this solution pins rather than chases the label.
-    #   * This job reads MscsUnitTests(2022).vcxproj, whose ClCompile entries
+    #   * This job reads MscsUnitTests(2026).vcxproj, whose ClCompile entries
     #     include backslash paths like ..\TreeFs\TreeFs.cpp. pwsh runs on the
     #     Linux runners and the script is mostly text work, so it would probably
     #     work there -- but "probably" was not established, and this repository
     #     has already shipped one defect that was invisible on the platform it
     #     was verified on. Run it where the project file is native.
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
 
@@ -102,7 +102,7 @@ jobs:
         run: >
           ./CheckSuiteWiring.ps1
           -ProjectDir .
-          -ProjectFile 'MscsUnitTests(2022).vcxproj'
+          -ProjectFile 'MscsUnitTests(2026).vcxproj'
           -VerboseReport
 
   cmake-parse:

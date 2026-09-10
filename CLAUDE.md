@@ -57,7 +57,7 @@ which builds `teardown_stress` with the sanitizer applied globally and runs it.
 
 ### The Windows MSBuild path
 
-`MscsUnitTests(2022).vcxproj` / `.sln` build the same three suites into a `MscsUnitTests.exe`
+`MscsUnitTests(2026).vcxproj` / `.sln` build the same three suites into a `MscsUnitTests.exe`
 via MSBuild, as an alternative to CMake. It is Debug|x64 only, uses a PCH (`stdafx.cpp`
 creates it — CMake builds without one), and its PreBuildEvent runs `CheckSuiteWiring.ps1`.
 **Any suite added to `TestMain.cpp` must be added to BOTH `CMakeLists.txt` and this
@@ -71,7 +71,7 @@ dependencies are not reachable from a runner. It checks wiring only:
 
 ```powershell
 python .github/ci/check_repo_invariants.py                 # sources wired, no POST_BUILD, .gitattributes, hook, STATUS declared
-./CheckSuiteWiring.ps1 -ProjectDir . -ProjectFile 'MscsUnitTests(2022).vcxproj' -VerboseReport
+./CheckSuiteWiring.ps1 -ProjectDir . -ProjectFile 'MscsUnitTests(2026).vcxproj' -VerboseReport
 cmake -S .github/ci/parse-check -B <tmp>                   # generate against stub siblings
 ```
 

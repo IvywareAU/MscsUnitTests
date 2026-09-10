@@ -59,7 +59,7 @@ KNOWN_UNWIRED = {
         "and needs none of this directory's harness.",
     "stdafx.cpp":
         "The MSBuild precompiled-header source (<PrecompiledHeader>Create). It is "
-        "named by MscsUnitTests(2022).vcxproj and by MscsUnitTestsExternal's, "
+        "named by MscsUnitTests(2026).vcxproj and by MscsUnitTestsExternal's, "
         "never by CMake, which builds these targets without a PCH. Unreferenced "
         "here is correct; unreferenced by BOTH .vcxproj files would not be, and "
         "the suite-wiring job is what would notice that.",
