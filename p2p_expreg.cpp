@@ -323,7 +323,7 @@ public:
         pMsg->SetDestin(kHubAddr);
         // One RHub field: "register me as a hub-status sink". The Explorer's
         // command loop walks the data node, so the message needs at least one.
-        P3PmsgField_SERIALISE(pMsg->r_datn(), _N("RHub"), L"1",
+        P3PmsgField_SERIALISE(pMsg->r_datn(), L"RHub", L"1",
                               FALSE, _T("p2p_expreg registration probe"));
         PostP2PeerMsg(pMsg);
 

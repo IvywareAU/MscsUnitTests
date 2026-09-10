@@ -508,7 +508,7 @@ static void Test_AttrDesc()
         oList += P3PmsgData("b");
 
         P3PmsgItem oItem;
-        oItem.r_name() = _N("TestNodeName");
+        oItem.r_name() = L"TestNodeName";
         oItem.r_Desc(P3PmsgField::AttrCMD_Create);
         oItem.r_Desc() += P3PmsgField(L"Johnno");
         oItem.r_Desc() += P3PmsgField(L"Bill");
@@ -548,7 +548,7 @@ static void Test_Curs_GotoKeyLifetime()
         const int kItems = 24;               // comfortably past the ring's 16 slots
 
         P3PmsgItem oItem;
-        oItem.r_name() = _N("GotoKeyLifetime");
+        oItem.r_name() = L"GotoKeyLifetime";
         oItem.r_Desc(P3PmsgField::AttrCMD_Create);
         for ( int i = 0; i < kItems; i++ )
         {
@@ -580,7 +580,7 @@ static void Test_Curs_GotoKeyLifetime()
         const int kItems = 24;
 
         P3PmsgItem oItem;
-        oItem.r_name() = _N("RenameKeyLifetime");
+        oItem.r_name() = L"RenameKeyLifetime";
         oItem.r_Desc(P3PmsgField::AttrCMD_Create);
         for ( int i = 0; i < kItems; i++ )
         {
@@ -595,13 +595,13 @@ static void Test_Curs_GotoKeyLifetime()
         LPCTNAM lpszOld = oCursOld.r_name().c_name();
 
         P3PmsgItem oNewName;
-        oNewName.r_name() = _N("Renamed");
+        oNewName.r_name() = L"Renamed";
         LPCTNAM lpszNew = oNewName.r_name().c_name();
 
         P3PmsgRefactor_Rename ( oItem, lpszOld, lpszNew );
 
-        TF_CHECK(oItem.r_Desc().Exists(_N("Renamed")));
-        TF_CHECK(!oItem.r_Desc().Exists(_N("Item23")));
+        TF_CHECK(oItem.r_Desc().Exists(L"Renamed"));
+        TF_CHECK(!oItem.r_Desc().Exists(L"Item23"));
         // Every other name must be untouched: a recycled key renames a
         // bystander instead of, or as well as, the intended item.
         for ( int i = 0; i < kItems - 1; i++ )
@@ -632,7 +632,7 @@ static void Test_Curs_GotoKeyLifetime()
         //  so a key recycled part-way through the scan matches a bystander that
         //  does not have it, or stops on a name it never was.
         P3PmsgItem oItem;
-        oItem.r_name() = _N("FindChildKeyLifetime");
+        oItem.r_name() = L"FindChildKeyLifetime";
         oItem.r_Desc(P3PmsgField::AttrCMD_Create);
         for ( int i = 0; i < kItems; i++ )
         {
@@ -640,7 +640,7 @@ static void Test_Curs_GotoKeyLifetime()
           swprintf_s(szName, 32, L"Item%02d", i);
           P3PmsgField oChild(szName);
           if ( i == kItems - 1 )
-            oChild.r_Attr(P3PmsgField::AttrCMD_Create) += P3PmsgField(_N("Marked"));
+            oChild.r_Attr(P3PmsgField::AttrCMD_Create) += P3PmsgField(L"Marked");
           oItem.r_Desc() += oChild;
         }
 
@@ -650,7 +650,7 @@ static void Test_Curs_GotoKeyLifetime()
         LPCTNAM lpszChild = oCursKey.r_name().c_name();
 
         P3PmsgItem oAttrName;
-        oAttrName.r_name() = _N("Marked");
+        oAttrName.r_name() = L"Marked";
         LPCTNAM lpszAttr = oAttrName.r_name().c_name();
 
         P3PmsgObject oFound =
@@ -672,7 +672,7 @@ static void Test_Curs_GotoKeyLifetime()
     TF_CASE("FindChildWithAttr matches the name it is given, not the others")
     {
         P3PmsgItem oItem;
-        oItem.r_name() = _N("FindChildSense");
+        oItem.r_name() = L"FindChildSense";
         oItem.r_Desc(P3PmsgField::AttrCMD_Create);
         for ( int i = 0; i < 4; i++ )
         {
@@ -680,11 +680,11 @@ static void Test_Curs_GotoKeyLifetime()
           swprintf_s(szName, 32, L"Kid%d", i);
           P3PmsgField oChild(szName);
           if ( i == 2 )
-            oChild.r_Attr(P3PmsgField::AttrCMD_Create) += P3PmsgField(_N("Tag"));
+            oChild.r_Attr(P3PmsgField::AttrCMD_Create) += P3PmsgField(L"Tag");
           oItem.r_Desc() += oChild;
         }
 
-        P3PmsgObject oHit = P3Pmsg_FindChildWithAttr ( oItem, _N("Tag"), _N("Kid2") );
+        P3PmsgObject oHit = P3Pmsg_FindChildWithAttr ( oItem, L"Tag", L"Kid2" );
         TF_CHECK(!oHit.IsVoid());
         if (!oHit.IsVoid())
         {
@@ -693,11 +693,11 @@ static void Test_Curs_GotoKeyLifetime()
         }
 
         //  A wildcard that matches the marked child.
-        P3PmsgObject oWild = P3Pmsg_FindChildWithAttr ( oItem, _N("Tag"), _N("Kid*") );
+        P3PmsgObject oWild = P3Pmsg_FindChildWithAttr ( oItem, L"Tag", L"Kid*" );
         TF_CHECK(!oWild.IsVoid());
 
         //  No name given at all - the documented default - still finds it.
-        P3PmsgObject oAny = P3Pmsg_FindChildWithAttr ( oItem, _N("Tag") );
+        P3PmsgObject oAny = P3Pmsg_FindChildWithAttr ( oItem, L"Tag" );
         TF_CHECK(!oAny.IsVoid());
     }
 
@@ -715,7 +715,7 @@ static void Test_Curs_GotoKeyLifetime()
     TF_CASE("FindChildWithAttr returns void for a search that matches nothing")
     {
         P3PmsgItem oItem;
-        oItem.r_name() = _N("FindChildMiss");
+        oItem.r_name() = L"FindChildMiss";
         oItem.r_Desc(P3PmsgField::AttrCMD_Create);
         for ( int i = 0; i < 4; i++ )
         {
@@ -723,13 +723,13 @@ static void Test_Curs_GotoKeyLifetime()
           swprintf_s(szName, 32, L"Kid%d", i);
           P3PmsgField oChild(szName);
           if ( i == 2 )
-            oChild.r_Attr(P3PmsgField::AttrCMD_Create) += P3PmsgField(_N("Tag"));
+            oChild.r_Attr(P3PmsgField::AttrCMD_Create) += P3PmsgField(L"Tag");
           oItem.r_Desc() += oChild;      // all four are LEAVES - no r_Desc()
         }
 
-        P3PmsgObject oNoName  = P3Pmsg_FindChildWithAttr ( oItem, _N("Tag"),        _N("Nobody") );
-        P3PmsgObject oNoAttr  = P3Pmsg_FindChildWithAttr ( oItem, _N("NoSuchAttr"), _N("Kid1")   );
-        P3PmsgObject oNeither = P3Pmsg_FindChildWithAttr ( oItem, _N("NoSuchAttr"), _N("Nobody") );
+        P3PmsgObject oNoName  = P3Pmsg_FindChildWithAttr ( oItem, L"Tag",        L"Nobody" );
+        P3PmsgObject oNoAttr  = P3Pmsg_FindChildWithAttr ( oItem, L"NoSuchAttr", L"Kid1"   );
+        P3PmsgObject oNeither = P3Pmsg_FindChildWithAttr ( oItem, L"NoSuchAttr", L"Nobody" );
         TF_CHECK(oNoName.IsVoid());
         TF_CHECK(oNoAttr.IsVoid());
         TF_CHECK(oNeither.IsVoid());
@@ -765,17 +765,17 @@ static void Test_Curs_GotoKeyLifetime()
     TF_CASE("Exists() says no to a name that is not there")
     {
         P3PmsgItem oItem;
-        oItem.r_name() = _N("ExistsHost");
+        oItem.r_name() = L"ExistsHost";
         oItem.r_Desc(P3PmsgField::AttrCMD_Create);
-        oItem.r_Desc() += P3PmsgField(_N("Present"));
+        oItem.r_Desc() += P3PmsgField(L"Present");
 
-        TF_CHECK(oItem.r_Desc().Exists(_N("Present")));
-        TF_CHECK(!oItem.r_Desc().Exists(_N("Absent")));
+        TF_CHECK(oItem.r_Desc().Exists(L"Present"));
+        TF_CHECK(!oItem.r_Desc().Exists(L"Absent"));
 
         //  And through the field-level overload, which is the one most callers
         //  reach for.
-        TF_CHECK(oItem.Exists(_N("Present")));
-        TF_CHECK(!oItem.Exists(_N("Absent")));
+        TF_CHECK(oItem.Exists(L"Present"));
+        TF_CHECK(!oItem.Exists(L"Absent"));
     }
 }
 
@@ -818,19 +818,20 @@ static void Test_Event()
         //  means a narrow string. Off Win32 the wide argument is then read as
         //  char* and stops at its first embedded NUL -- after ONE character --
         //  and the specs it never consumed leak into the text as a literal %s.
-        //  It truncates on Windows too. _N(...) selects the wide overload,
+        //  It truncates on Windows too. An L"..." literal selects the wide
+        //  overload,
         //  where p2p_fix_wformat maps %s to %ls for glibc and MSVC takes it
         //  natively; a genuinely narrow argument such as __FUNCTION__ is %hs
         //  there, whose 'h' p2p_fix_wformat erases for the same reason.
-        P2Pevent* pEVT = EVERR->Message(_N("addr=[%s] fn=[%hs]"),
-                                        _N("Alpha.Bravo"), "TheFunction");
+        P2Pevent* pEVT = EVERR->Message(L"addr=[%s] fn=[%hs]",
+                                        L"Alpha.Bravo", "TheFunction");
         TF_CHECK(pEVT != nullptr);
         if ( pEVT )
         {
           const CString strMsg = pEVT->GetMessage();
-          TF_CHECK(strMsg.Find(_N("Alpha.Bravo")) >= 0);   // not just "A"
-          TF_CHECK(strMsg.Find(_N("TheFunction")) >= 0);   // narrow arg, via %hs
-          TF_CHECK(strMsg.Find(_N("%s"))          <  0);   // nothing left unconsumed
+          TF_CHECK(strMsg.Find(L"Alpha.Bravo") >= 0);   // not just "A"
+          TF_CHECK(strMsg.Find(L"TheFunction") >= 0);   // narrow arg, via %hs
+          TF_CHECK(strMsg.Find(L"%s")          <  0);   // nothing left unconsumed
           pEVT->Cancel(false);
         }
     }
