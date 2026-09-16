@@ -13,9 +13,9 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 //
-// TargetCoreSuite.cpp
+// TargetcoreSuite.cpp
 //
-// Unit tests for the TargetCore networking kernel.
+// Unit tests for the Targetcore networking kernel.
 //
 // Two layers are covered:
 //   1. P2PeerMsg32 value plumbing -- source/destin addressing, priority and
@@ -23,7 +23,7 @@
 //   2. End-to-end dispatch -- two P2PeerHubs in one process exchanging a
 //      broadcast purely in memory via PostP2Pmsg(msg, targetHub.GetHubID()),
 //      the lightest path that still drives a hub pump and On_P2PeerBCast.
-//      (This mirrors _TargetCore_UseExamples\LocalInMemoryTest.)
+//      (This mirrors _Targetcore_UseExamples\LocalInMemoryTest.)
 
 #include "stdafx.h"
 
@@ -31,7 +31,7 @@
 #include "P2PeerHub.h"
 #include "P2PeerMsg.h"
 #include "Msgexception.h"
-#include "TargetCore_c.h"      // the flat C surface (sink + handle-guard cases below)
+#include "Targetcore_c.h"      // the flat C surface (sink + handle-guard cases below)
 #include "P2PCngCrypto.h"      // p2pcng::SelfTest — crypto KATs
 #include "P2PIdentityStore.h"  // p2pcng identity storage — DPAPI / allow-list
 #include "P2PAuthLogin.h"      // p2pauth login proof — signature over the login
@@ -261,7 +261,7 @@ static void Test_InMemoryTwoHubDelivery()
 // ---------------------------------------------------------------------------
 // The flat C API's receive sink (p2peerhub_set_sink / _u8)
 //
-// Everything else in TargetCore_c.h is post-only; these cases pin the half that
+// Everything else in Targetcore_c.h is post-only; these cases pin the half that
 // closes the loop, and they do it entirely through the C surface -- create,
 // register, spawn, post, observe -- because that is the only surface a Panama or
 // PHP-extension consumer has. The message is injected onto the hub's own pump
@@ -269,7 +269,7 @@ static void Test_InMemoryTwoHubDelivery()
 // Test_InMemoryTwoHubDelivery uses, so no socket is involved.
 //
 // Restored 2026-08-14 with the ABI itself. These cases were deleted in 2010b5a
-// along with TargetCore_c.*, and e8bfd04 brought the ABI back without them --
+// along with Targetcore_c.*, and e8bfd04 brought the ABI back without them --
 // see the header comment on Test_CApiHandleGuards below.
 // ---------------------------------------------------------------------------
 namespace {
@@ -442,7 +442,7 @@ static void Test_CApiHubSink()
 // Passing means the refusal was decided without a dereference.
 //
 // WHY THIS BLOCK EXISTS TWICE IN THE HISTORY. It was written in b4401a4 against
-// the 54 entry points of the day, deleted in 2010b5a when TargetCore's flat C
+// the 54 entry points of the day, deleted in 2010b5a when Targetcore's flat C
 // API was deleted, and restored here on 2026-08-14 -- because e8bfd04 restored
 // the ABI (now 74 exported entry points, and the surface MSCS_JavaBindings
 // downcalls into) WITHOUT restoring these. For that interval the registry and
@@ -1014,7 +1014,7 @@ static void Test_LoginAuth()
     {
         // ProductionPlan.md Stage 3 step 8 added these entry points, and the
         // reason they had to be added is the point of the case: RequireAuth
-        // defaults to ON, and TargetCore_c.h is the ONLY surface a
+        // defaults to ON, and Targetcore_c.h is the ONLY surface a
         // redistributed build offers. Without them the default flip would
         // have been a hard break with no migration reachable from C at all -
         // no way to provision, and no way to opt out.
@@ -1485,7 +1485,7 @@ static void Test_UndeliverableReportBounded()
 }
 
 // ---------------------------------------------------------------------------
-void RunTargetCoreSuite()
+void RunTargetcoreSuite()
 {
     Test_MessageValuePlumbing();
     Test_AddrNameAccessors();
@@ -1493,7 +1493,7 @@ void RunTargetCoreSuite()
     Test_UndeliverableCascade();
     Test_UndeliverableReportBounded();
     // Restored 2026-08-14 with the ABI they cover. The note that stood here
-    // said these were "preserved in MSCS_JavaBindings\TargetCore\" -- only the
+    // said these were "preserved in MSCS_JavaBindings\Targetcore\" -- only the
     // wrapper SOURCES were ever copied there, never these cases, and that copy
     // has since been deleted too (it had fallen several fixes behind). They are
     // still the only cases in the tree that drive the flat C surface.

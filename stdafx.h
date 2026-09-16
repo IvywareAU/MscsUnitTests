@@ -16,7 +16,7 @@
 // stdafx.h : precompiled header for MscsUnitTests
 //
 // Mirrors the include surface used by the shipped MSCS sample harnesses
-// (see _TargetCore_UseExamples\LocalInMemoryTest) so the Msgcore / TargetCore
+// (see _Targetcore_UseExamples\LocalInMemoryTest) so the Msgcore / Targetcore
 // headers compile in a consuming project.
 #pragma once
 
@@ -38,7 +38,7 @@
 #include <afxtempl.h>
 #include <comutil.h>
 
-// The Msgcore/TargetCore public headers now route Win32 types AND the pinned
+// The Msgcore/Targetcore public headers now route Win32 types AND the pinned
 // serialized-data element type (P2PWCHAR, LinuxPortPlan §4.2) through the platform
 // shim layer. Consuming projects must include it too, exactly as Msgcore's own
 // stdafx.h does, or headers like P2PmsgVBLock.h fail to compile (undefined

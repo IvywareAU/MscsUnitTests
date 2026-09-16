@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 //
-// p2p_u8_smoke.cpp — smoke test for the TargetCore UTF-8 (_u8) C API surface
+// p2p_u8_smoke.cpp — smoke test for the Targetcore UTF-8 (_u8) C API surface
 // (LinuxPortPlan.md §4.2, §6.2, Phase 6). The wchar_t p2p*_c entry points use each
 // platform's native wide layout (UTF-16 on Windows, UTF-32 on Linux) and cannot
 // carry a string portably through Panama/jextract; the _u8 twins take/return UTF-8
@@ -30,10 +30,10 @@
 // immediately, before the following _u8 call.
 //
 // Build (Linux):
-//   g++ -std=c++23 -I../TargetCore -I../Msgcore/Platform p2p_u8_smoke.cpp \
-//       -L../build/TargetCore -ltargetcore -Wl,-rpath,../build/TargetCore -o p2p_u8_smoke
+//   g++ -std=c++23 -I../Targetcore -I../Msgcore/Platform p2p_u8_smoke.cpp \
+//       -L../build/Targetcore -ltargetcore -Wl,-rpath,../build/Targetcore -o p2p_u8_smoke
 
-#include "TargetCore_c.h"
+#include "Targetcore_c.h"
 #include <cstdio>
 #include <cstring>
 

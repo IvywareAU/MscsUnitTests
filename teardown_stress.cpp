@@ -83,10 +83,10 @@
 //        defaults: 200 4 8   (run 1000 8 12 by hand under a sanitizer)
 //
 // Build (Linux, plain):
-//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
+//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat teardown_stress.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o teardown_stress
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o teardown_stress
 // Under ASan/TSan: run_sanitizers.sh rebuilds the libs + harness with -fsanitize.
 
 #include "stdafx.h"

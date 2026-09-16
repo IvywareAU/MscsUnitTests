@@ -24,10 +24,10 @@
 // Verdict = process EXIT CODE:  0 SUCCESS | 3 TIMEOUT | 1 SETUP.
 //
 // Build (Linux):
-//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
+//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat mix_con3.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o mix_con3
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o mix_con3
 
 #include "stdafx.h"
 

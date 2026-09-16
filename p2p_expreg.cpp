@@ -259,7 +259,7 @@ protected:
             // Ask for the BROADCAST, once. QueryP2PmsgExp_Hub() with no
             // destination posts an UNADDRESSED P2PexpumpHub into this expump,
             // which is the only thing in the tree that reaches the broadcast
-            // half of On_P2PmsgExp_Hub — nothing in TargetCore raises a hub
+            // half of On_P2PmsgExp_Hub — nothing in Targetcore raises a hub
             // status change of its own (m_dwExpumpMask, P2Pwin32.cpp:1137, is
             // written and never read). Legal here and nowhere else: we are on
             // the expump thread.

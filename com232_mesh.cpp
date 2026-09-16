@@ -15,7 +15,7 @@
 //
 // com232_mesh.cpp — portable (Linux/Windows) single-process two-hub serial probe.
 //
-// Linux port of _TargetCore_UseExamples/Com232MeshTest: exercises the FULL TargetCore pump
+// Linux port of _Targetcore_UseExamples/Com232MeshTest: exercises the FULL Targetcore pump
 // lifecycle (SpawnHub -> pump thread -> CreateIoCompletionPort / GetQueuedCompletionStatus
 // loop -> WaitCommEvent(EV_RXCHAR)=io_uring poll -> PostQueuedCompletionStatus) plus the
 // login handshake, over the P2PeerCon232 RS-232 transport (termios on Linux, DCB on Win).
@@ -34,10 +34,10 @@
 // Verdict = process EXIT CODE:  0 SUCCESS | 3 TIMEOUT | 1 SETUP.
 //
 // Build (Linux):
-//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
+//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat com232_mesh.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o com232_mesh
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o com232_mesh
 
 #include "stdafx.h"
 
@@ -117,7 +117,7 @@ namespace {
     std::thread      g_relay;
 
     // open a PTY master, unlock it, and make it raw (no echo/CR-NL fixups that would
-    // corrupt the binary TargetCore framing); return master fd, fill slave path.
+    // corrupt the binary Targetcore framing); return master fd, fill slave path.
     int OpenPtyMaster(std::string& slavePath)
     {
         int m = ::posix_openpt(O_RDWR | O_NOCTTY);

@@ -15,7 +15,7 @@
 //
 // dmx_mesh.cpp — portable (Linux/Windows) single-process two-hub Dmx connection probe.
 //
-// Linux port of _TargetCore_UseExamples/DmxMeshTest: exercises the FULL TargetCore pump
+// Linux port of _Targetcore_UseExamples/DmxMeshTest: exercises the FULL Targetcore pump
 // lifecycle (SpawnHub -> pump thread -> CreateIoCompletionPort / GetQueuedCompletionStatus
 // loop -> PostQueuedCompletionStatus delivery) plus the login handshake, over the
 // P2PeerConDmx in-address-space transport (no socket, no OS handle). This is the first
@@ -30,8 +30,8 @@
 //
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -I../Msgcore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat \
-//       dmx_mesh.cpp -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore \
-//       -luring -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o dmx_mesh
+//       dmx_mesh.cpp -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore \
+//       -luring -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o dmx_mesh
 
 #include "stdafx.h"
 

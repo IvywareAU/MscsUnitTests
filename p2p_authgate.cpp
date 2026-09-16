@@ -48,7 +48,7 @@
 //      just connect() on a bare TCP socket, exactly what an attacker with
 //      netcat and a frame dump has.
 //
-//   3. Writes ONE well-formed TargetCore frame carrying a P2Pmsg_BCast, with
+//   3. Writes ONE well-formed Targetcore frame carrying a P2Pmsg_BCast, with
 //      a source address the sender simply CLAIMS ("AuthGate.Client"). Nothing
 //      has established that the sender is entitled to that address.
 //
@@ -77,9 +77,9 @@
 //
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore \
-//       -I../TargetCore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat p2p_authgate.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o p2p_authgate
+//       -I../Targetcore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat p2p_authgate.cpp \
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o p2p_authgate
 
 #include "stdafx.h"
 

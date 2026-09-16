@@ -15,7 +15,7 @@
 //
 // wsa_mesh.cpp — portable (Linux/Windows) single-process two-hub loopback-TCP probe.
 //
-// Linux port of _TargetCore_UseExamples/WsaMeshTest: exercises the FULL TargetCore pump
+// Linux port of _Targetcore_UseExamples/WsaMeshTest: exercises the FULL Targetcore pump
 // lifecycle (SpawnHub -> pump thread -> CreateIoCompletionPort / GetQueuedCompletionStatus
 // loop -> PostQueuedCompletionStatus delivery) plus the login handshake, over the
 // P2PeerConWsa transport on a real loopback TCP socket (127.0.0.1). This is the first
@@ -29,10 +29,10 @@
 // Verdict = process EXIT CODE:  0 SUCCESS | 3 TIMEOUT | 1 SETUP.
 //
 // Build (Linux):
-//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
+//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat wsa_mesh.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o wsa_mesh
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o wsa_mesh
 
 #include "stdafx.h"
 

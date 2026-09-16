@@ -56,7 +56,7 @@
 #include "Msgexception.h"
 #include "P2PIdentityStore.h"
 #include "P2PAuthLogin.h"
-#include "TargetCore_c.h"
+#include "Targetcore_c.h"
 
 #include <cstdio>
 #include <cstring>
@@ -275,7 +275,7 @@ static bool RunChain ( int nIx, bool bWaive, long *pnRecv )
          oMid.SetAllowList ( g_sMidAcl.c_str ( ) ) != p2pcng::IdOk )
     { Log ( "SETUP: middle provisioning failed" ); return false; }
 
-    //  SpawnHub hands back a thread handle the CALLER owns -- TargetCore_c.h
+    //  SpawnHub hands back a thread handle the CALLER owns -- Targetcore_c.h
      //  says so in as many words: "THE HANDLE IS YOURS AND YOU DO NOT NEED IT
      //  ... ignoring the return value entirely is a leaked thread handle, not
      //  a leaked thread." Nothing here needs it (CloseHub joins the thread),

@@ -32,7 +32,7 @@
 #  are worse than one that cannot.
 #
 #  AND READ THIS SECOND, because it is specific to THIS repository and does not
-#  apply to the sibling TargetCore hook this file is adapted from.
+#  apply to the sibling Targetcore hook this file is adapted from.
 #
 #  Green here is the WEAKEST of the three MSCS repositories' CI, and the gap is
 #  wider than it looks. This repository holds the entire test suite for the

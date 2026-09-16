@@ -71,7 +71,7 @@
       <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>..\Msgcore;..\MsgcoreMFC;..\TargetCore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\Msgcore;..\MsgcoreMFC;..\Targetcore;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <SDLCheck>false</SDLCheck>
     </ClCompile>
@@ -79,7 +79,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
-      <AdditionalDependencies>Msgcore.lib;MsgcoreMFC.lib;TargetCore.lib;MsWsock.lib;ws2_32.lib;comsuppwd.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Msgcore.lib;MsgcoreMFC.lib;Targetcore.lib;MsWsock.lib;ws2_32.lib;comsuppwd.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>..\lib\x64\$(Configuration);..\lib\x64;..\lib;..\P2PeerUtilityHubs\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
@@ -92,8 +92,8 @@
 if errorlevel 1 echo POSTBUILD ERROR: Msgcore.dll not found in "..\Msgcore\out\$(Platform)\$(Configuration)" -- build Msgcore first. &amp;&amp; exit /b 1
 if exist "..\Msgcore\out\$(Platform)\$(Configuration)\Msgcore.pdb" xcopy /Y /D "..\Msgcore\out\$(Platform)\$(Configuration)\Msgcore.pdb" "$(OutDir)"
 xcopy /Y /D "$(WDMSCS_DEBUG)\MsgcoreMFC.dll" "$(OutDir)"
-xcopy /Y /D "$(WDMSCS_DEBUG)\TargetCore.dll" "$(OutDir)"
-if exist "$(WDMSCS_DEBUG)\TargetCore.pdb" xcopy /Y /D "$(WDMSCS_DEBUG)\TargetCore.pdb" "$(OutDir)"</Command>
+xcopy /Y /D "$(WDMSCS_DEBUG)\Targetcore.dll" "$(OutDir)"
+if exist "$(WDMSCS_DEBUG)\Targetcore.pdb" xcopy /Y /D "$(WDMSCS_DEBUG)\Targetcore.pdb" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
 
@@ -106,7 +106,7 @@ if exist "$(WDMSCS_DEBUG)\TargetCore.pdb" xcopy /Y /D "$(WDMSCS_DEBUG)\TargetCor
     <ClCompile Include="TestFramework.cpp" />
     <ClCompile Include="MsgcoreSuite.cpp" />
     <ClCompile Include="MsgcoreCApiSuite.cpp" />
-    <ClCompile Include="TargetCoreSuite.cpp" />
+    <ClCompile Include="TargetcoreSuite.cpp" />
     <!-- TreeFS core: portable, no MFC/PCH (does not include stdafx.h) -->
     <!-- Replication (Phase 5): portable, no MFC/PCH -->
   </ItemGroup>

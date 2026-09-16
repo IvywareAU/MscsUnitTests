@@ -46,7 +46,7 @@ Read this before treating a passed hook as "master is good". It does not mean th
 gap is wider in this repository than in either sibling.
 
 **This repository is the MSCS test suite, and CI cannot build it.** A build needs `Msgcore`,
-`TargetCore`, `Platform`, `TreeFs`, `P2PeerUtilityHubs`, `DspChain` and the solution-root
+`Targetcore`, `Platform`, `TreeFs`, `P2PeerUtilityHubs`, `DspChain` and the solution-root
 `CMakeLists.txt`. Only the first two are on GitHub. `Platform`, `P2PeerUtilityHubs` and
 `DspChain` have **no git remote at all**, and `TreeFs` lives on a private non-GitHub host. The
 closure simply does not exist anywhere a runner can reach it.

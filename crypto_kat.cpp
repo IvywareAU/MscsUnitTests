@@ -33,13 +33,13 @@
 //
 // Verdict = process EXIT CODE: 0 all pass | 1 a KAT failed.
 //
-// Registered as the `crypto_kat` CTest target (TargetCore/CMakeLists.txt); run via
+// Registered as the `crypto_kat` CTest target (Targetcore/CMakeLists.txt); run via
 //   ctest --test-dir build -R crypto_kat
 // The p2pcng symbols are hidden in libtargetcore.so (resolved intra-library by the secure
 // channel), so the KAT compiles the self-contained OpenSSL backend TU directly rather than
 // linking the .so:
-//   g++ -std=c++23 -I../TargetCore -o crypto_kat crypto_kat.cpp
-//       ../TargetCore/{P2PCngCrypto_openssl,P2PIdentityStore,P2PAuthLogin,P2PeerSeal}.cpp
+//   g++ -std=c++23 -I../Targetcore -o crypto_kat crypto_kat.cpp
+//       ../Targetcore/{P2PCngCrypto_openssl,P2PIdentityStore,P2PAuthLogin,P2PeerSeal}.cpp
 //       -lcrypto
 // (no trailing backslashes: a line continuation inside a // comment is -Wcomment)
 

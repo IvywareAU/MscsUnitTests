@@ -17,7 +17,7 @@
 // authentication keys the connection. Does it require the TRANSPORT to USE
 // the key it just installed?
 //
-// BACKGROUND - TargetCore ProductionPlan.md F-S6-3, opened by the threat-model
+// BACKGROUND - Targetcore ProductionPlan.md F-S6-3, opened by the threat-model
 // sweep of Stage 6 step 17 and left open by F-S6-2, which could only report
 // it. The cypher lives in P2Peerio::SendP2PeerMsg / RecvP2PeerMsg, so whether
 // a transport is encrypted has depended on which subclass its factory happened
@@ -215,7 +215,7 @@ static std::string N ( const wchar_t *w )
 //  begins at whatever offset the block headers and names ahead of it add up
 //  to, which is odd about half the time.  Casting it to wchar_t* is undefined
 //  behaviour; on Linux, where wchar_t wants 4-byte alignment, UBSan reports it
-//  at the dereference.  TargetCore's finding F-S5-3.
+//  at the dereference.  Targetcore's finding F-S5-3.
 //    Copying the bytes out into storage the caller aligned is the fix.  See
 //  P3PmsgData::c_vBlobCopy() for the same thing offered as an accessor.
 static std::wstring BodyW ( P2PeerMsg *pMsg )

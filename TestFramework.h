@@ -88,4 +88,4 @@ int  tf_runner_finish(int nSkipped);
 // like this runner still had them.
 void RunMsgcoreSuite();
 void RunMsgcoreCApiSuite();
-void RunTargetCoreSuite();
+void RunTargetcoreSuite();

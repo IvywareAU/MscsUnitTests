@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 //
-// perf_ab.cpp — portable (Linux/Windows) throughput+latency A/B for the TargetCore
+// perf_ab.cpp — portable (Linux/Windows) throughput+latency A/B for the Targetcore
 // message pump.  Same single-process two-hub loopback-TCP setup as wsa_mesh.cpp, but
 // instead of one BCast it drives:
 //
@@ -35,10 +35,10 @@
 //   defaults: K=2000  N=50000  payload=64
 //
 // Build (Linux):
-//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
+//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat perf_ab.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o perf_ab
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o perf_ab
 
 #include "stdafx.h"
 
@@ -199,7 +199,7 @@ int main(int argc, char* argv[])
     { const char* bs = std::getenv("PERF_BATCH");            // W6 batch-sender size
       g_batch = bs ? (size_t)std::max<long>(0, std::atol(bs)) : 0; }
 
-    std::printf("=== perf_ab — TargetCore loopback-TCP perf A/B ===\n");
+    std::printf("=== perf_ab — Targetcore loopback-TCP perf A/B ===\n");
 #if defined(_WIN32)
     std::printf("backend: Windows / IOCP\n");
 #else

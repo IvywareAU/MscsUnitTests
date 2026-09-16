@@ -19,7 +19,7 @@
 // executable that uses TF_CASE / TF_CHECK.
 //
 // WHY THIS FILE EXISTS. All of this lived inside TestMain.cpp until the suite
-// was split in two (2026-08-14): MscsUnitTests kept the Msgcore and TargetCore
+// was split in two (2026-08-14): MscsUnitTests kept the Msgcore and Targetcore
 // suites, and the TreeFS / replication / blob / P2PeerUtilityHubs suites moved
 // to MscsUnitTestsExternal. Two runners need one framework, and this repository
 // has been bitten repeatedly by the alternative -- a second copy that silently

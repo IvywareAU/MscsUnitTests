@@ -7,7 +7,7 @@ This product includes software developed by Khrustal & Mann.
 Licensed under the Apache License, Version 2.0. See the LICENSE file in
 this directory, or http://www.apache.org/licenses/LICENSE-2.0
 
-This repository is the test suite for Msgcore and TargetCore. It contains no
+This repository is the test suite for Msgcore and Targetcore. It contains no
 library code of its own, and it cannot be built on its own -- see the
 "Components required at build time" section below, which is not a formality
 here: three of the components named there have no public remote at all.
@@ -18,7 +18,7 @@ Attribution
 -------------------------------------------------------------------------
 
 Every file in this repository is the work of Khrustal & Mann, unlike the two
-libraries it tests -- Msgcore and TargetCore are jointly attributed to Ivyware
+libraries it tests -- Msgcore and Targetcore are jointly attributed to Ivyware
 Pty Ltd and Khrustal & Mann, because they carry Ivyware code dating to 2000.
 Nothing of that lineage is reproduced here.
 
@@ -28,7 +28,7 @@ smoke program MsgcoreTests/MsgcoreTests.cpp touched, and its case list was
 informed by that program. It is not a copy of it: MsgcoreTests.cpp is 434 lines
 of unasserted console output and carries no copyright notice of its own;
 MsgcoreSuite.cpp is 1224 lines of named, asserted cases. The attribution above
-reflects that, and follows the same reading applied in _TargetCore_UseExamples,
+reflects that, and follows the same reading applied in _Targetcore_UseExamples,
 whose harnesses have the same relationship to their Ivyware-era ancestors.
 
 
@@ -65,7 +65,7 @@ seal_interop.cpp:185) skips '#' lines wholesale.
 Not wizard-generated, unlike their counterparts in the sibling repositories
 -------------------------------------------------------------------------
 
-Msgcore/NOTICE and TargetCore/NOTICE each carry a list of Microsoft project-
+Msgcore/NOTICE and Targetcore/NOTICE each carry a list of Microsoft project-
 template and wizard-generated files that remain subject to Microsoft's terms.
 This repository has no such list, and the absence is deliberate rather than an
 omission. The files that would be on it are hand-authored here:
@@ -93,7 +93,7 @@ This suite links, includes, or compiles source from the following. No copy of
 any of them is contained in this repository:
 
     Msgcore                     Apache License, Version 2.0.
-    TargetCore                  Copyright 2000-2026 Ivyware Pty Ltd,
+    Targetcore                  Copyright 2000-2026 Ivyware Pty Ltd,
                                 Khrustal & Mann. The two libraries under test;
                                 each carries its own LICENSE and NOTICE.
 
@@ -114,7 +114,7 @@ any of them is contained in this repository:
                                 Copyright(c) Ivyware Pty Ltd 2014 and 2006
                                 respectively, all rights reserved) and have NOT
                                 been relicensed to Apache-2.0 as Msgcore and
-                                TargetCore were. That notice requires that it
+                                Targetcore were. That notice requires that it
                                 appear in all copies and in supporting
                                 documentation; this entry is that
                                 documentation, and the notices in those two
@@ -127,7 +127,7 @@ any of them is contained in this repository:
 Two files here are compiled by OTHER repositories rather than by this one, and
 carry their Apache headers with them:
 
-    crypto_kat.cpp              Built by TargetCore/CMakeLists.txt, which
+    crypto_kat.cpp              Built by Targetcore/CMakeLists.txt, which
                                 reaches into this directory for it.
     TestFramework.cpp           Compiled by path into MscsUnitTestsExternal's
                                 runner, so that one framework serves both.

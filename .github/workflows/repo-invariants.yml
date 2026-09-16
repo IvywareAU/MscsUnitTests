@@ -19,8 +19,8 @@
 # STATE THE LIMIT FIRST, because this workflow is easy to over-read.
 #
 # This repository IS the MSCS test suite. It cannot be built here. Building it
-# needs Msgcore, TargetCore, Platform, TreeFs, P2PeerUtilityHubs, DspChain and
-# the solution-root CMakeLists.txt; of those, only Msgcore and TargetCore are on
+# needs Msgcore, Targetcore, Platform, TreeFs, P2PeerUtilityHubs, DspChain and
+# the solution-root CMakeLists.txt; of those, only Msgcore and Targetcore are on
 # GitHub. Platform, P2PeerUtilityHubs and DspChain have no git remote at all,
 # and TreeFs is on a private non-GitHub host. So no job below compiles a
 # translation unit, and no job below runs a test.

@@ -40,7 +40,7 @@ set(_mut_includes
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${_mscs_tests_root}
     ${_mscs_tests_root}/../Msgcore
-    ${_mscs_tests_root}/../TargetCore
+    ${_mscs_tests_root}/../Targetcore
     ${_mscs_tests_root}/../Msgcore/Platform)
 if(NOT WIN32)
     list(APPEND _mut_includes ${_mscs_tests_root}/../Msgcore/Platform/win-compat)

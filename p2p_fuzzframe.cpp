@@ -13,7 +13,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 //
-// p2p_fuzzframe.cpp — FUZZ HARNESS for the TargetCore FRAMING PATH.
+// p2p_fuzzframe.cpp — FUZZ HARNESS for the Targetcore FRAMING PATH.
 //
 //   Ahtung_Disaster.md, Part 5 Track B item 5 / "Order after that" item 5:
 //   "Fuzz the framing path (RecvP2PeerMsg stages 1-3) — the C1-class bug lived
@@ -222,9 +222,9 @@
 //
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore \
-//       -I../TargetCore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat p2p_fuzzframe.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o p2p_fuzzframe
+//       -I../Targetcore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat p2p_fuzzframe.cpp \
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o p2p_fuzzframe
 
 #include "stdafx.h"
 

@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 //
 // p2p_authposture.cpp - can a RUNNING hub be asked whether any of its
-// protections are on? TargetCore ProductionPlan.md F-S6-2, THREAT_MODEL.md
+// protections are on? Targetcore ProductionPlan.md F-S6-2, THREAT_MODEL.md
 // asset S9.
 //
 // BACKGROUND. Stage 4 step 13 put the two numbers an operator asks for -

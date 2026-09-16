@@ -15,7 +15,7 @@
 //
 // TestMain.cpp
 //
-// Entry point for the MSCS core unit-test runner: Msgcore and TargetCore.
+// Entry point for the MSCS core unit-test runner: Msgcore and Targetcore.
 //
 // SCOPE, and why it changed. Until 2026-08-14 this runner also drove the TreeFS,
 // replication, blob and P2PeerUtilityHubs suites -- 184 of its 303 cases. Those
@@ -39,7 +39,7 @@
 // ---------------------------------------------------------------------------
 int main(int /*argc*/, char* /*argv*/[])
 {
-    if (!tf_runner_startup("MSCS unit tests (Msgcore + TargetCore)"))
+    if (!tf_runner_startup("MSCS unit tests (Msgcore + Targetcore)"))
         return 1;
 
     // A suite that is compiled out must SAY SO.  UtilHubsSuite was absent from the
@@ -63,8 +63,8 @@ int main(int /*argc*/, char* /*argv*/[])
     ++nSkipped;
 #endif
 
-    printf("\n[TargetCore]\n");
-    RunTargetCoreSuite();
+    printf("\n[Targetcore]\n");
+    RunTargetcoreSuite();
 
     return tf_runner_finish(nSkipped);
 }

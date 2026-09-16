@@ -15,11 +15,11 @@
 //
 // alex_test.cpp — portable (Linux/Windows) TWO-PROCESS loopback-TCP probe.
 //
-// Linux port of _TargetCore_UseExamples/AlexTest, restructured as an automatable
+// Linux port of _Targetcore_UseExamples/AlexTest, restructured as an automatable
 // two-process test. This is the LinuxPortPlan §9 Phase-3 EXIT criterion:
 // "AlexTest green Linux<->Linux" in its real two-process form — a server
 // process and a client process talking over the OS TCP stack, each driving
-// its OWN TargetCore pump on its OWN io_uring ring in a separate address
+// its OWN Targetcore pump on its OWN io_uring ring in a separate address
 // space (unlike wsa_mesh.cpp, which puts both hubs in one process/one ring).
 //
 // Modes (single executable, mode chosen by argv[1]):
@@ -45,9 +45,9 @@
 //
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore \
-//       -I../TargetCore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat alex_test.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o alex_test
+//       -I../Targetcore -I../Msgcore/Platform -I../Msgcore/Platform/win-compat alex_test.cpp \
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o alex_test
 
 #include "stdafx.h"
 

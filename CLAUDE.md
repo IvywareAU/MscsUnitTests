@@ -8,7 +8,7 @@ this file carried a 119-case count and an 11-entry port table for weeks after bo
 
 ## What this repository is
 
-`MscsUnitTests` is the **test suite** for the Msgcore and TargetCore libraries of the MSCS
+`MscsUnitTests` is the **test suite** for the Msgcore and Targetcore libraries of the MSCS
 solution. It contains no library code — every `.cpp` here is either a suite compiled into the
 `unit_suite` runner or a standalone harness registered with CTest.
 
@@ -97,7 +97,7 @@ fast-forward-only and refuses any SHA that has not gone green in the workflow.
 ### The runner (`unit_suite`)
 
 - `TestMain.cpp` — entry point; calls `RunMsgcoreSuite()`, `RunMsgcoreCApiSuite()`,
-  `RunTargetCoreSuite()`. **125 cases** (70 Msgcore, 19 Msgcore C-API, 36 TargetCore),
+  `RunTargetcoreSuite()`. **125 cases** (70 Msgcore, 19 Msgcore C-API, 36 Targetcore),
   counted 2026-09-08. It was 119 until then; recount rather than trust this line.
 - `TestFramework.cpp/.h` — `TF_CASE` / `TF_CHECK` / `TF_CHECK_EQ`, plus the process-wide
   lifecycle: one `CWinApp` (MFC allows exactly one per exe), `StartupP2Pmsg`/`CleanupP2Pmsg`,

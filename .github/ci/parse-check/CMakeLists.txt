@@ -81,7 +81,7 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mscs_ci_stub.cpp
 # THREE targets, and that is the headline. Before the 2026-08-14 split this list
 # also needed treefs and p2putilhubs, because unit_suite compiled the TreeFS,
 # replication, blob and P2PeerUtilityHubs suites. Those moved to
-# MscsUnitTestsExternal, and what is left links only what Msgcore and TargetCore
+# MscsUnitTestsExternal, and what is left links only what Msgcore and Targetcore
 # provide -- both of which are published repositories. If a real build job is
 # ever added here, this is the list it has to satisfy.
 foreach(_stub msgcore targetcore p2pplatform)

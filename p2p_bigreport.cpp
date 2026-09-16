@@ -64,7 +64,7 @@
 //
 // WHAT THIS TEST GUARDS THAT THE UNIT SUITE DOES NOT
 //
-//   The fix has two halves and they fail differently. TargetCoreSuite's cases
+//   The fix has two halves and they fail differently. TargetcoreSuite's cases
 //   cover the heap half (limit 1). They do NOT cover limit 2: with the body
 //   elided but AFPmsg() restored, the whole unit suite is GREEN and this test
 //   fails at 38424 bytes with the connection dropped. Measured, both ways.

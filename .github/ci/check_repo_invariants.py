@@ -54,7 +54,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # quietly rot into an excuse list.
 KNOWN_UNWIRED = {
     "crypto_kat.cpp":
-        "Registered by the SIBLING repo: TargetCore/CMakeLists.txt builds it "
+        "Registered by the SIBLING repo: Targetcore/CMakeLists.txt builds it "
         "from ../MscsUnitTests/crypto_kat.cpp, because it links -lcrypto only "
         "and needs none of this directory's harness.",
     "stdafx.cpp":

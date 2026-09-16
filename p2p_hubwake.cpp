@@ -24,7 +24,7 @@
 // own thread, assert. Debug aborted the process; Release returned silently.
 // Either way a paused hub could never be resumed.
 //
-// Nothing exercised it. The one reference in the tree (TargetCoreSuite.cpp)
+// Nothing exercised it. The one reference in the tree (TargetcoreSuite.cpp)
 // passes a deliberately bogus handle, which p2peerhub_wakeup_hub() rejects
 // before it reaches the hub at all, so the assert never fired in CI.
 //

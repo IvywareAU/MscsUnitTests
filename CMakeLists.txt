@@ -26,7 +26,7 @@
 # Verdict for every harness = process EXIT CODE: 0 SUCCESS; non-zero = CTest failure.
 
 # The portable suites include the legacy MFC headers (P2Pmsg.h / P2PeerHub.h) and link the
-# Msgcore/TargetCore MFC extension DLLs, so the test exes must use shared MFC too on Windows.
+# Msgcore/Targetcore MFC extension DLLs, so the test exes must use shared MFC too on Windows.
 # CMAKE_MFC_FLAG is consumed at add_executable() time, so set it before any target here.
 if(WIN32)
     set(CMAKE_MFC_FLAG 2)
@@ -56,7 +56,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/MscsTestCommon.cmake)
 
 # unit_suite: the algorithmic unit runner (TestMain.cpp) for the two libraries this
 # directory is named for — the Msgcore data-structure suite, the Msgcore C-API suite
-# and the TargetCore suite. 119 cases.
+# and the Targetcore suite. 119 cases.
 #
 # The TreeFS core/actor/posix/service, replication, blob and P2PeerUtilityHubs suites
 # were here until 2026-08-14 and are now MscsUnitTestsExternal's unit_suite_external.
@@ -77,7 +77,7 @@ add_executable(unit_suite
     TestFramework.cpp
     MsgcoreSuite.cpp
     MsgcoreCApiSuite.cpp
-    TargetCoreSuite.cpp)
+    TargetcoreSuite.cpp)
 _mscs_test_common(unit_suite)
 target_link_libraries(unit_suite PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME unit_suite COMMAND unit_suite)
@@ -87,8 +87,8 @@ set_tests_properties(unit_suite PROPERTIES TIMEOUT 60)
 # string (1/2/3/4-byte incl. astral U+1F680) round-trips name+value byte-identically — the
 # cross-platform-FFI guarantee (the same exe produces identical bytes on both OSes).
 #
-# p2p_u8_smoke was removed with TargetCore's flat C API and RESTORED with it on 2026-08-14:
-# TargetCore_c.* is back in the tree (74 exported entry points) and is what
+# p2p_u8_smoke was removed with Targetcore's flat C API and RESTORED with it on 2026-08-14:
+# Targetcore_c.* is back in the tree (74 exported entry points) and is what
 # MSCS_JavaBindings downcalls into. Between the two events the _u8 transcoding half of that
 # ABI was shipped with no test on either platform. If the ABI goes away again, this goes
 # with it — and comes back when it does.
@@ -133,7 +133,7 @@ add_test(NAME golden_utf16_bytes COMMAND ${CMAKE_COMMAND}
 # Windows; AF_UNIX on Linux / named pipes on Windows; in-process Dmx everywhere), and the
 # harness .cpp files are portable, so the TCP/pipe/Dmx meshes gate on BOTH toolchains now.
 # ---------------------------------------------------------------------------
-# A TargetCore runtime harness: one TU, links the full transport stack, verdict = exit code.
+# A Targetcore runtime harness: one TU, links the full transport stack, verdict = exit code.
 function(mscs_mesh_test name)
     add_executable(${name} ${name}.cpp)
     _mscs_test_common(${name})
@@ -348,7 +348,7 @@ set_tests_properties(p2p_reportsign PROPERTIES
 # peer simply logs in AS whoever it wants and is self-consistent thereafter.
 #
 #   *** PASSES (measured 2026-08-14). The signed login landed
-#       (TargetCore/P2PAuthLogin.h), so the claimed identity is now PROVEN and
+#       (Targetcore/P2PAuthLogin.h), so the claimed identity is now PROVEN and
 #       not merely asserted. Measured verdict: "Both peers matched the domain
 #       'AuthPsk.*'; only one matched a key." ***
 #
@@ -695,7 +695,7 @@ set_tests_properties(p2p_pumpbound PROPERTIES TIMEOUT 300)
 # raw P2PsigHub_WAKEUP - reached it by the same route and got an abort in Debug
 # or a silent return in Release. A paused hub could never be resumed.
 #
-# Nothing exercised it. The single reference in the tree (TargetCoreSuite.cpp,
+# Nothing exercised it. The single reference in the tree (TargetcoreSuite.cpp,
 # the bogus-handle sweep) is rejected by the handle check before it reaches the
 # hub, which is why CI stayed green over an assert on a public entry point.
 #
@@ -797,7 +797,7 @@ set_tests_properties(p2p_srcbound PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7828 LABELS security)
 
 # p2p_listenscope: can a SERVICE be told not to be reachable from off this
-# machine? TargetCore P2PeerConWsa::SetListenScope, added 2026-08-27.
+# machine? Targetcore P2PeerConWsa::SetListenScope, added 2026-08-27.
 #
 # P2PeerConWsa::Listen() bound INADDR_ANY as a LITERAL from the import, with no
 # setting anywhere on the class to say otherwise, so every service this library
@@ -834,7 +834,7 @@ set_tests_properties(p2p_listenscope PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7847 LABELS security)
 
 # p2p_acceptfilter: WHO may connect, as against WHERE the service listens.
-# TargetCore P2PeerConWsa::AllowAcceptFrom, added beside the scope above.
+# Targetcore P2PeerConWsa::AllowAcceptFrom, added beside the scope above.
 #
 # ITS OWN TARGET off the same source, for p2p_srcbound's reason: one mode, one
 # verdict, one exit code, and check_repo_invariants.py reads the STATUS banner
@@ -914,7 +914,7 @@ add_test(NAME p2p_resolve COMMAND p2p_resolve 7849)
 set_tests_properties(p2p_resolve PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7849)
 
-# p2p_ipv6: can this transport speak IPv6 at all? TargetCore
+# p2p_ipv6: can this transport speak IPv6 at all? Targetcore
 # P2PeerConWsa::SetFamily, added 2026-08-28.
 #
 # P2PeerConWsa opened AF_INET at all three socket sites - Listen(), Accept() and
@@ -1283,7 +1283,7 @@ set_tests_properties(p2p_revokedist PROPERTIES
     TIMEOUT 180 RESOURCE_LOCK loopback_7830 LABELS security)
 
 # p2p_authchannel: the gate the THREAT MODEL found, not the fuzzer. Writing
-# THREAT_MODEL.md (TargetCore ProductionPlan.md Stage 6 step 17) meant mapping
+# THREAT_MODEL.md (Targetcore ProductionPlan.md Stage 6 step 17) meant mapping
 # every protection to the adversary it answers and to the line that enforces
 # it, and two conditions that the documentation calls one switch turned out to
 # be independent: KeyXWanted() ("my hub requires authentication") decides
@@ -1313,7 +1313,7 @@ set_tests_properties(p2p_authchannel PROPERTIES
     TIMEOUT 180 RESOURCE_LOCK loopback_7836 LABELS security)
 
 # p2p_authposture: can a RUNNING hub be asked whether any of this is ON?
-# TargetCore ProductionPlan.md F-S6-2, THREAT_MODEL.md asset S9, and the gate
+# Targetcore ProductionPlan.md F-S6-2, THREAT_MODEL.md asset S9, and the gate
 # for the fix.
 #
 # Stage 4 step 13 put load and occupancy into the hub snapshot and p2p_hubsnap
@@ -1346,7 +1346,7 @@ set_tests_properties(p2p_authposture PROPERTIES
     TIMEOUT 180 RESOURCE_LOCK loopback_7838 LABELS security)
 
 # p2p_confchannel: is the cypher CONSULTED, or only INSTALLED?
-# TargetCore ProductionPlan.md F-S6-3, THREAT_MODEL.md, and the gate for the
+# Targetcore ProductionPlan.md F-S6-3, THREAT_MODEL.md, and the gate for the
 # fix. The sibling of p2p_authchannel: that one asks whether a hub that
 # requires authentication requires the CHANNEL it authenticated on; this one
 # asks whether it requires the TRANSPORT to use the key it agreed.
@@ -1392,7 +1392,7 @@ set_tests_properties(p2p_confchannel PROPERTIES
 
 # p2p_linktrust: is what a link may SKIP decided by what its transport can
 # VOUCH FOR, and does a relaxation stay inside the class it was granted to?
-# TargetCore securityRevision.md §8.2 steps 1-4, and the gate for them.
+# Targetcore securityRevision.md §8.2 steps 1-4, and the gate for them.
 #
 # Every security switch in the tree was a property of the HUB, so a DMX
 # connection - a pointer handoff between two objects on one heap - ran a full
@@ -1477,7 +1477,7 @@ set_tests_properties(p2p_confchannel PROPERTIES
 #
 # READ THAT AS "the verdict this test gives WHEN IT REACHES ONE", because this
 # one needs the qualification and the others do not. It inherits an OPEN defect
-# it did not cause -- incidental finding 7 in TargetCore's
+# it did not cause -- incidental finding 7 in Targetcore's
 # securityRevision_progress.md -- which kills the process in a live TCP phase,
 # intermittently, at a rate measured as high as one run in two on one machine.
 # It was re-measured on the baseline commit with this pass's work stashed and it
@@ -1737,7 +1737,7 @@ set_tests_properties(p2p_e2ewaive PROPERTIES
 #
 #   Windows  89901 -> 0        Linux  1044 -> 0
 #
-# What closed it is in Msgcore and TargetCore, not here, and it is two changes:
+# What closed it is in Msgcore and Targetcore, not here, and it is two changes:
 #
 #   1. P2Peerio.cpp stage 4 passes the RECEIVED LENGTH into the P2PeerMsg
 #      constructor, so an arriving image is adopted through
@@ -1939,7 +1939,7 @@ set_tests_properties(p2p_expreg PROPERTIES
 # they could silently differ: the UTF-8 address transcript (wchar_t is 2 bytes
 # here and 4 there, and the addresses are inside the GCM AAD and the signature)
 # and the 96-byte X||Y||d private blob. Linux builds its half in
-# TargetCore/CMakeLists.txt against the OpenSSL backend.
+# Targetcore/CMakeLists.txt against the OpenSSL backend.
 if(WIN32)
     #   STATUS: PASSES        (measured 2026-08-14, Windows Debug)
     add_executable(seal_interop seal_interop.cpp)

@@ -15,7 +15,7 @@
 //
 // pipe_mesh.cpp — portable (Linux/Windows) single-process two-hub named-pipe probe.
 //
-// Linux port of _TargetCore_UseExamples/PipeMeshTest: exercises the FULL TargetCore pump
+// Linux port of _Targetcore_UseExamples/PipeMeshTest: exercises the FULL Targetcore pump
 // lifecycle (SpawnHub -> pump thread -> CreateIoCompletionPort / GetQueuedCompletionStatus
 // loop -> PostQueuedCompletionStatus delivery) plus the login handshake, over the
 // P2PeerConPipe transport. On Windows this is a real NT named pipe; on Linux the shim
@@ -31,10 +31,10 @@
 // Verdict = process EXIT CODE:  0 SUCCESS | 3 TIMEOUT | 1 SETUP.
 //
 // Build (Linux):
-//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../TargetCore \
+//   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat pipe_mesh.cpp \
-//       -L../build/TargetCore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
-//       -Wl,-rpath,../build/TargetCore -Wl,-rpath,../build/Msgcore -o pipe_mesh
+//       -L../build/Targetcore -ltargetcore -L../build/Msgcore -lmsgcore -luring \
+//       -Wl,-rpath,../build/Targetcore -Wl,-rpath,../build/Msgcore -o pipe_mesh
 
 #include "stdafx.h"
 

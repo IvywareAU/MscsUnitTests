@@ -445,7 +445,7 @@ static bool WriteEmptyRevocationList ( const std::string &sPath )
 {
     std::FILE *fp = std::fopen ( sPath.c_str ( ), "wb" );
     if ( !fp ) return false;
-    std::fputs ( "# TargetCore revocation list - nothing revoked yet\n", fp );
+    std::fputs ( "# Targetcore revocation list - nothing revoked yet\n", fp );
     std::fclose ( fp );
     return true;
 }

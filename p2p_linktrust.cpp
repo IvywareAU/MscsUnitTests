@@ -316,7 +316,7 @@ static const char *TrustName ( int n )
 
 //  The payload pointer is NOT aligned - P2PeerMsg::Data() addresses the
 //  application bytes where they sit inside a pack(1) image, so casting it to
-//  wchar_t* is undefined behaviour and UBSan says so on Linux. TargetCore
+//  wchar_t* is undefined behaviour and UBSan says so on Linux. Targetcore
 //  finding F-S5-3; copying the bytes out into aligned storage is the fix.
 static std::wstring BodyW ( P2PeerMsg *pMsg )
 {

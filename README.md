@@ -1,6 +1,6 @@
 # MscsUnitTests
 
-The test suite for the **Msgcore** and **TargetCore** libraries of the MSCS solution.
+The test suite for the **Msgcore** and **Targetcore** libraries of the MSCS solution.
 
 There is no library code here. Every `.cpp` in this directory is either a case suite
 compiled into the `unit_suite` runner, or a standalone harness registered with CTest
@@ -21,7 +21,7 @@ in as a sibling directory:
 MSCS\                      <- clone MscsSolution here (CMakeLists.txt, CMakePresets.json)
 ├── Msgcore\               <- clone Msgcore
 │   └── Platform\          <- p2pplatform
-├── TargetCore\            <- clone TargetCore
+├── Targetcore\            <- clone Targetcore
 └── MscsUnitTests\         <- this repository
 ```
 
@@ -53,7 +53,7 @@ counts, not results**: nothing below is a claim that a run was green.
 
 | | |
 |---|---|
-| `unit_suite` cases | **125** `TF_CASE` — 70 Msgcore, 19 Msgcore C-API, 36 TargetCore |
+| `unit_suite` cases | **125** `TF_CASE` — 70 Msgcore, 19 Msgcore C-API, 36 Targetcore |
 | Registered CTest entries | **54**, across both platforms; a given run registers the subset its platform enables |
 | Carrying `LABELS security` | **37** — every one of them declares a `STATUS`: 37 `PASSES`, 0 `EXPECTED-FAIL` |
 
@@ -143,7 +143,7 @@ case in it was dark on Windows for fourteen days.
 ```
 MscsUnitTests\
 ├── TestMain.cpp  TestFramework.cpp/.h      the unit_suite runner
-├── MsgcoreSuite.cpp  MsgcoreCApiSuite.cpp  TargetCoreSuite.cpp
+├── MsgcoreSuite.cpp  MsgcoreCApiSuite.cpp  TargetcoreSuite.cpp
 ├── p2p_*.cpp                               standalone harnesses (auth, seal, fuzz, transport)
 ├── *_mesh.cpp  mix_con*.cpp                per-transport mesh harnesses
 ├── CMakeLists.txt                          registration + the STATUS banners
