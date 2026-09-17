@@ -208,7 +208,16 @@ public:
 
     WaiveHub ( P2PaddrSTR strAddr, Role eRole )
         : P2PeerHub ( strAddr ), m_eRole ( eRole ) { }
-    virtual ~WaiveHub ( ) { }
+    //  CLOSE FIRST, and it has to be here rather than in ~P2PeerHub. Every
+    //  hub in this suite spawns a pump thread and closes it before the object
+    //  dies; this one was the only exception, and TSan charged it two vptr
+    //  races for it - the base destructor rewrites the vtable pointer on
+    //  ENTRY, so by the time ~P2PeerHub's own CloseHub() runs the pump thread
+    //  has already been dispatching virtuals through an object that no longer
+    //  has them. One of the two reports caught it mid-seal, inside
+    //  P2PeerCon::GetAuthHub from SealAppMsgOutbound. Refer the note on
+    //  ~P2PeerHub, which now says so out loud when it catches this.
+    virtual ~WaiveHub ( ) { CloseHub ( ); }
 
 protected:
     //  NOTES: Returns msgHANDLED WITHOUT calling the base, which stops a
