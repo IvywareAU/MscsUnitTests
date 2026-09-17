@@ -235,6 +235,7 @@
 
 #include "fuzz_corpus.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -472,7 +473,10 @@ static void DumpCursor(FILE* fp)
 // Bumped once per input. The watchdog below watches ONLY this: it is the
 // difference between "the parser is working" and "the parser is not coming
 // back", and it needs no cooperation from inside the parser to say so.
-static volatile unsigned long g_nProgress      = 0;
+//  ATOMIC, not volatile. The watchdog thread reads it while the fuzz loop
+//  writes it, and volatile promises nothing about that - it stops the compiler
+//  caching the load and stops nothing else. TSan reported both directions
+static std::atomic<unsigned long> g_nProgress { 0 };
 static int                    g_nAssertsThisIn = 0;
 
 static void SetCursor(const char* pszCase, int nCase, int nIter,
@@ -487,7 +491,7 @@ static void SetCursor(const char* pszCase, int nCase, int nIter,
     g_cur.nHead   = w.n < sizeof(g_cur.aHead) ? w.n : (unsigned)sizeof(g_cur.aHead);
     std::memcpy(g_cur.aHead, w.b, g_cur.nHead);
     g_nAssertsThisIn = 0;
-    ++g_nProgress;
+    g_nProgress.fetch_add ( 1, std::memory_order_relaxed );
 }
 
 // ---------------------------------------------------------------------------
@@ -733,12 +737,13 @@ static void WatchdogFired()
 #ifdef _WIN32
 static DWORD WINAPI WatchdogThread(LPVOID)
 {
-    unsigned long nLast = g_nProgress;
+    unsigned long nLast = g_nProgress.load ( std::memory_order_relaxed );
     unsigned      nIdle = 0;
     for (;;)
     {
         ::Sleep(250);
-        if (g_nProgress != nLast) { nLast = g_nProgress; nIdle = 0; continue; }
+        const unsigned long nNow = g_nProgress.load ( std::memory_order_relaxed );
+        if (nNow != nLast) { nLast = nNow; nIdle = 0; continue; }
         if (++nIdle >= kHangSeconds * 4) WatchdogFired();
     }
 }
@@ -749,12 +754,13 @@ static void StartWatchdog()
 #else
 static void* WatchdogThread(void*)
 {
-    unsigned long nLast = g_nProgress;
+    unsigned long nLast = g_nProgress.load ( std::memory_order_relaxed );
     unsigned      nIdle = 0;
     for (;;)
     {
         ::usleep(250 * 1000);
-        if (g_nProgress != nLast) { nLast = g_nProgress; nIdle = 0; continue; }
+        const unsigned long nNow = g_nProgress.load ( std::memory_order_relaxed );
+        if (nNow != nLast) { nLast = nNow; nIdle = 0; continue; }
         if (++nIdle >= kHangSeconds * 4) WatchdogFired();
     }
     return 0;

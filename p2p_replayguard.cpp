@@ -72,6 +72,7 @@
 #include "P2PAuthLogin.h"
 #include "P2PeerSeal.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -92,9 +93,14 @@ static const wchar_t *kRelName     = L"P2PmsgBCast";
 static const char     kRelBody[]   = "transiting down from another branch";
 
 // Bob's tally of what his receive path made of each arriving body.
-static volatile LONG g_nOpened  = 0;      // p2pseal::SealOk
-static volatile LONG g_nReplay  = 0;      // p2pseal::SealErrReplay
-static volatile LONG g_nOther   = 0;      // anything else - a setup problem
+//  ATOMIC, not volatile-plus-InterlockedIncrement. The increments were always
+//  atomic; the READS on the main thread were not, and neither were the resets
+//  between phases - so `const LONG n1Open = g_nOpened` raced Bob's pump thread
+//  and TSan reported it twice. volatile is not a synchronisation primitive and
+//  was never doing the job the InterlockedIncrement beside it implied
+static std::atomic<LONG> g_nOpened { 0 };  // p2pseal::SealOk
+static std::atomic<LONG> g_nReplay { 0 };  // p2pseal::SealErrReplay
+static std::atomic<LONG> g_nOther  { 0 };  // anything else - a setup problem
 
 static void Log ( const char *msg )
 {
@@ -188,9 +194,9 @@ protected:
                                            pIn, cbIn,
                                            &vPlain[0], vPlain.size ( ), &cbOut );
 
-        if      ( e == p2pseal::SealOk )         InterlockedIncrement ( &g_nOpened );
-        else if ( e == p2pseal::SealErrReplay )  InterlockedIncrement ( &g_nReplay );
-        else                                     InterlockedIncrement ( &g_nOther );
+        if      ( e == p2pseal::SealOk )         ++g_nOpened;
+        else if ( e == p2pseal::SealErrReplay )  ++g_nReplay;
+        else                                     ++g_nOther;
 
         std::printf ( "[replayguard] BOB opened a body from '%s': %s (%u bytes)\n",
                       N ( pMsg->GetSource ( ) ).c_str ( ),
@@ -362,9 +368,11 @@ int main ( int argc, char *argv[] )
         //  outage, so this phase matters more than it did, not less.
         Log ( "--- phase 1: same sealed body twice, RefuseSealReplay OFF ---" );
         oBob.RefuseSealReplay ( false );
-        g_nOpened = g_nReplay = g_nOther = 0;
+        g_nOpened = 0; g_nReplay = 0; g_nOther = 0;
         PostTwice ( oAlice, vBody[0] );
-        const LONG n1Open = g_nOpened, n1Replay = g_nReplay, n1Other = g_nOther;
+        const LONG n1Open   = g_nOpened.load ( ),
+                   n1Replay = g_nReplay.load ( ),
+                   n1Other  = g_nOther .load ( );
         std::printf ( "[replayguard] phase 1: opened=%ld replay=%ld other=%ld\n",
                       (long)n1Open, (long)n1Replay, (long)n1Other );
         std::fflush ( stdout );
@@ -372,21 +380,24 @@ int main ( int argc, char *argv[] )
         // ================= Phase 2: the refusal, switch ON =================
         Log ( "--- phase 2: same sealed body twice, RefuseSealReplay ON ---" );
         oBob.RefuseSealReplay ( true );
-        g_nOpened = g_nReplay = g_nOther = 0;
+        g_nOpened = 0; g_nReplay = 0; g_nOther = 0;
         PostTwice ( oAlice, vBody[1] );
-        const LONG n2Open = g_nOpened, n2Replay = g_nReplay, n2Other = g_nOther;
+        const LONG n2Open   = g_nOpened.load ( ),
+                   n2Replay = g_nReplay.load ( ),
+                   n2Other  = g_nOther .load ( );
         std::printf ( "[replayguard] phase 2: opened=%ld replay=%ld other=%ld\n",
                       (long)n2Open, (long)n2Replay, (long)n2Other );
         std::fflush ( stdout );
 
         // ================= Phase 3: liveness ===============================
         Log ( "--- phase 3: a DIFFERENT body, switch still ON (liveness) ---" );
-        g_nOpened = g_nReplay = g_nOther = 0;
+        g_nOpened = 0; g_nReplay = 0; g_nOther = 0;
         oAlice.PostP2PeerMsg ( new P2PeerMsg32 ( kAliceAddr, kBobAddr,
                                                  P2Pmsg_BCast, &vBody[2][0],
                                                  (P2Psize_t)vBody[2].size ( ) ) );
         Sleep ( 1200 );
-        const LONG n3Open = g_nOpened, n3Replay = g_nReplay;
+        const LONG n3Open   = g_nOpened.load ( ),
+                   n3Replay = g_nReplay.load ( );
         std::printf ( "[replayguard] phase 3: opened=%ld replay=%ld\n",
                       (long)n3Open, (long)n3Replay );
         std::fflush ( stdout );

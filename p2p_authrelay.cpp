@@ -96,6 +96,7 @@
 #include "P2PIdentityStore.h"
 #include "P2PAuthLogin.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -136,7 +137,10 @@ static HANDLE g_hRelayUp  = NULL;      // the relay has both sockets
 // login authenticated.
 static RawSock           g_sToServer = INVALID_SOCKET;
 static CRITICAL_SECTION g_csToServer;
-static volatile bool    g_bRelayStop = false;
+//  ATOMIC, not volatile. volatile says nothing about ordering between threads
+//  and TSan says so: main sets this while RelayC2S is reading it at the top of
+//  its loop. It happens to work on x86 and it is not what the word means
+static std::atomic<bool> g_bRelayStop { false };
 
 static void Log(const char* msg)
 {
@@ -514,12 +518,26 @@ int main(int argc, char* argv[])
             }
         }
 
+        //  SHUTDOWN, JOIN, THEN CLOSE - in that order, and the order is the
+        //  point. RelayC2S and RelayS2C sit blocked in recv(), so something has
+        //  to break them out; closing the descriptor does break them out, and
+        //  it also takes the descriptor away from a thread that is still
+        //  inside a call on it. TSan reported exactly that, twice: close() on
+        //  the main thread against recv() on T4 and T5. shutdown() ends the
+        //  connection without retiring the descriptor, so the recv()s return 0,
+        //  the threads leave, RelayAccept joins them, and only then is there
+        //  nobody left to race the close.
         g_bRelayStop = true;
+        if (g_sFromClient != INVALID_SOCKET) shutdown(g_sFromClient, SD_BOTH);
+        if (g_sToServer   != INVALID_SOCKET) shutdown(g_sToServer,   SD_BOTH);
+        if (g_sListen     != INVALID_SOCKET) shutdown(g_sListen,     SD_BOTH);
+        WaitForSingleObject(hRelayThread, 3000);
+        CloseHandle(hRelayThread);
+        //  RelayAccept has joined both relay threads by here, so the sockets
+        //  are nobody's but ours
         if (g_sFromClient != INVALID_SOCKET) CLOSESOCK(g_sFromClient);
         if (g_sToServer   != INVALID_SOCKET) CLOSESOCK(g_sToServer);
         if (g_sListen     != INVALID_SOCKET) CLOSESOCK(g_sListen);
-        WaitForSingleObject(hRelayThread, 3000);
-        CloseHandle(hRelayThread);
 
         oClient.CloseHub();
         WaitForSingleObject(hClientThread, 3000);
