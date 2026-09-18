@@ -504,9 +504,30 @@ int main ( int argc, char *argv[] )
               Sleep ( 300 );
             }
             oClient.CloseHub ( );
+            // NOTES: CloseHub() waits for the pump thread to LEAVE, but it is
+            //        documented to leave the SpawnHub() handle alone - refer
+            //        P2PeerHub.cpp:493, "IT ONLY READS THE MEMBER". The handle
+            //        is the caller's, and on Linux it owns a P2PThreadImpl
+            //        holding the std::thread: CloseHandle is what joins-or-
+            //        detaches it and frees that (Platform/p2pthread.h:221-230).
+            //        Omitting it leaves a thread TSan never sees ended and
+            //        32+24 bytes LSan never sees freed - which is exactly what
+            //        the first sanitiser run to contain this test reported on
+            //        2026-09-19. Wait-then-close is the pattern the harness
+            //        already uses for the relay threads (a8108cd).
+            if ( hClientThread )
+            {
+              WaitForSingleObject ( hClientThread, 3000 );
+              CloseHandle ( hClientThread );
+            }
           }
         }
         oServer.CloseHub ( );
+        if ( hServerThread )
+        {
+          WaitForSingleObject ( hServerThread, 3000 );
+          CloseHandle ( hServerThread );
+        }
       }
     }
 
@@ -531,9 +552,11 @@ int main ( int argc, char *argv[] )
         "[gcmdirection]\n"
         "[gcmdirection] What this proves: the cypher keys the two directions\n"
         "[gcmdirection] separately, so each key has ONE writer and the 2^32\n"
-        "[gcmdirection] random-nonce budget is per direction and countable.\n"
-        "[gcmdirection] What it does NOT prove: that the budget is ENFORCED -\n"
-        "[gcmdirection] nothing counts yet - nor that the c2s/s2c labels are\n"
+        "[gcmdirection] random-nonce budget is per direction and countable -\n"
+        "[gcmdirection] and, since phase 5b, that it is COUNTED and REFUSED at\n"
+        "[gcmdirection] its ceiling, the refusal being the budget rather than a\n"
+        "[gcmdirection] cypher that has stopped working.\n"
+        "[gcmdirection] What it does NOT prove: that the c2s/s2c labels are\n"
         "[gcmdirection] the intended way round, which no test can show while\n"
         "[gcmdirection] there is one implementation. Refer the header.\n" );
     std::fflush ( stdout );

@@ -1332,8 +1332,19 @@ set_tests_properties(p2p_authchannel PROPERTIES
 # No WILL_FAIL: it asserts the fixed behaviour. Proven RED first, twice - with the
 # single-key derivation reinstated it fails 9 of 22 checks including both socket
 # checks, and with the budget comparison disabled it fails 2 of 22.
-#   STATUS: PASSES        (measured 2026-09-19, Windows Debug + Release and
-#                          Linux GCC via the paired CI run)
+#
+# PHASE 6 OWNS TWO SpawnHub() HANDLES AND MUST CLOSE THEM. CloseHub() waits for the
+# pump thread to LEAVE but is documented not to touch the handle - "IT ONLY READS THE
+# MEMBER" (P2PeerHub.cpp:493). On Linux the handle owns a P2PThreadImpl holding the
+# std::thread, and CloseHandle is what joins-or-detaches it and frees that
+# (Platform/p2pthread.h:221-230). The first version omitted it and passed all 22 checks
+# on every Windows configuration while failing BOTH Linux sanitisers - TSan `thread
+# leak` twice, LSan 160 bytes in 6 allocations, same two lines. Windows sees only a
+# handle leak at exit and nothing in the matrix looks for one. Fourth instance of the
+# harness mistake a8108cd is about; same fix, wait then close.
+#   STATUS: PASSES        (measured 2026-09-19: Windows Debug + Release, Linux GCC,
+#                          and the whole security label at 39/39 under BOTH Linux
+#                          TSan and Linux ASan+UBSan+LSan, nothing excluded)
 add_executable(p2p_gcmdirection p2p_gcmdirection.cpp)
 _mscs_test_common(p2p_gcmdirection)
 target_link_libraries(p2p_gcmdirection PRIVATE targetcore msgcore p2pplatform)
