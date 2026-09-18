@@ -1305,6 +1305,25 @@ set_tests_properties(p2p_revokedist PROPERTIES
 # No WILL_FAIL: it asserts the fixed behaviour, and it was RED against the
 # tree that had the defect and green against the same tree one condition later.
 #   STATUS: PASSES        (measured 2026-08-20, Windows Debug)
+# p2p_gcmdirection: the session cypher holds TWO keys, one per direction, so the
+# key a peer seals with is never the key it opens with
+# (Targetcore_ProdDocs/OpenCodeWork.md item 1 stage 1).
+#
+# The nonce is 96 bits and RANDOM, so NIST SP 800-38D section 8.3 bounds a key at
+# 2^32 invocations. One key shared by both ends spent that from both ends at once
+# and neither could count the other's draws. Split, each key has one writer.
+#
+# Phases 1-5 drive P2PeerioGcm directly and need no socket; phase 6 stands up two
+# authenticated hubs and moves traffic BOTH ways, which is the only phase that
+# runs KeyXDerive - and therefore the reason this is labelled `security` rather
+# than left in unit_suite, which the sanitiser gate does not run.
+add_executable(p2p_gcmdirection p2p_gcmdirection.cpp)
+_mscs_test_common(p2p_gcmdirection)
+target_link_libraries(p2p_gcmdirection PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_gcmdirection COMMAND p2p_gcmdirection 7859)
+set_tests_properties(p2p_gcmdirection PROPERTIES
+    TIMEOUT 180 RESOURCE_LOCK loopback_7859 LABELS security)
+
 add_executable(p2p_authchannel p2p_authchannel.cpp)
 _mscs_test_common(p2p_authchannel)
 target_link_libraries(p2p_authchannel PRIVATE targetcore msgcore p2pplatform)
