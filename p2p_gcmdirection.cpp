@@ -34,9 +34,11 @@
 // either end kept would have been authoritative. Split, each key has exactly
 // one writer - which is what makes bounding it possible at all.
 //
-// THE BOUND ITSELF IS NOT ENFORCED YET and this test does not pretend it is.
-// That is stage 2. This gate covers stage 1 only: that the two directions use
-// different keys.
+// THE BOUND IS ENFORCED AS OF STAGE 2, and phase 5b is where. Sealing refuses
+// once a key has been used kGcmMaxSeals times. 2^32 seals cannot be reached in
+// a test, so the ceiling is settable - which is not a weakening, because the
+// path exercised at a ceiling of three is the same fetch_add and the same
+// comparison a production key meets at 2^32.
 //
 // WHAT THIS TEST DOES - six phases, the first five with no sockets.
 //
@@ -52,6 +54,10 @@
 //   Phase 4 (WRONG ORDER)      a peer that installed the pair backwards opens
 //                              nothing. This is the loud failure the
 //                              derivation comment promises.
+//   Phase 5b (THE BUDGET)      the send key refuses past its ceiling, the
+//                              ceiling is the NIST figure by default, a
+//                              re-key resets the count, and opening a frame
+//                              spends none of it. Stage 2.
 //   Phase 5 (THE LOOPBACK)     the single-key SetKey() still round-trips. Four
 //                              callers depend on it - GcmCryptoSelfTest,
 //                              p2p_confchannel and TargetcoreSuite - and it is
@@ -194,6 +200,62 @@ static void CypherPhases ( )
           bSealedAB && ( oWrong.Decrypt ( (const char *)&vAB[0], (int)nSealed
                                         , (char *)&vPlay[0], 0, 0 ) != FALSE );
       Check ( !bWrongOpened, "a backwards peer opened nothing" );
+    }
+
+    // -- Phase 5b: THE NONCE BUDGET (stage 2) ------------------------------
+    //  2^32 seals cannot be reached in a test, which is why the ceiling is
+    //  settable. Setting it is not a weakening of the check: the enforcement
+    //  path exercised here is the same fetch_add and the same comparison a
+    //  production key meets at 2^32.
+    Log ( "--- phase 5b: the seal budget refuses past its ceiling ---" );
+    {
+      P2PeerioGcm oBudget;
+      oBudget.SetKeyPair ( (const char *)aK1, (int)sizeof(aK1)
+                         , (const char *)aK2, (int)sizeof(aK2) );
+
+      Check ( oBudget.GetSealCeiling ( ) == P2PeerioGcm::kGcmMaxSeals,
+              "a fresh cypher defaults to the NIST 2^32 ceiling" );
+      Check ( oBudget.GetSealCount ( ) == 0, "and to a zero seal count" );
+
+      oBudget.SetSealCeiling ( 3 );
+
+      std::vector<unsigned char> vB ( nSealed );
+      int nAdmitted = 0;
+      for ( int i = 0; i < 5; ++i )
+        if ( oBudget.Encrypt ( szBody, (char *)&vB[0], (int)nBody, 0, 0 ) )
+          ++nAdmitted;
+
+      Check ( nAdmitted == 3, "exactly the ceiling was admitted, no more" );
+      Check ( oBudget.GetSealCount ( ) >= 3, "the count records what happened" );
+
+      //  The refusal must be the BUDGET and not a broken cypher: raise the
+      //  ceiling and the same object seals again. Without this the phase
+      //  above would pass on a cypher that had simply stopped working.
+      oBudget.SetSealCeiling ( P2PeerioGcm::kGcmMaxSeals );
+      Check ( oBudget.Encrypt ( szBody, (char *)&vB[0], (int)nBody, 0, 0 ) != FALSE,
+              "raising the ceiling lets it seal - the refusal was the budget" );
+
+      //  A new key is a new budget.
+      P2PeerioGcm oReset;
+      oReset.SetKeyPair ( (const char *)aK1, (int)sizeof(aK1)
+                        , (const char *)aK2, (int)sizeof(aK2) );
+      oReset.SetSealCeiling ( 1 );
+      oReset.Encrypt ( szBody, (char *)&vB[0], (int)nBody, 0, 0 );
+      Check ( oReset.Encrypt ( szBody, (char *)&vB[0], (int)nBody, 0, 0 ) == FALSE,
+              "the second seal is refused at a ceiling of one" );
+      oReset.SetKeyPair ( (const char *)aK2, (int)sizeof(aK2)
+                        , (const char *)aK1, (int)sizeof(aK1) );
+      Check ( oReset.GetSealCount ( ) == 0, "re-keying reset the count" );
+      Check ( oReset.Encrypt ( szBody, (char *)&vB[0], (int)nBody, 0, 0 ) != FALSE,
+              "and the new key seals again on its own budget" );
+
+      //  Decrypt draws no nonce, so it must not spend the budget.
+      P2PeerioGcm oRx;
+      oRx.SetKeyPair ( (const char *)aK2, (int)sizeof(aK2)
+                     , (const char *)aK1, (int)sizeof(aK1) );
+      std::vector<unsigned char> vRx ( nBody );
+      oRx.Decrypt ( (const char *)&vB[0], (int)nSealed, (char *)&vRx[0], 0, 0 );
+      Check ( oRx.GetSealCount ( ) == 0, "opening a frame spends no budget" );
     }
 
     // -- Phase 5: the loopback form ---------------------------------------
