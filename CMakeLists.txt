@@ -796,6 +796,64 @@ add_test(NAME p2p_srcbound COMMAND p2p_srcbound 7828 --source-only)
 set_tests_properties(p2p_srcbound PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7828 LABELS security)
 
+# p2p_pipecap: the same question p2p_acceptcap asks of P2PeerConWsa, asked of
+# P2PeerConPipe - and until 2026-09-19 the answer was different. The decision
+# helper AcceptAtCapacity() is on the BASE class (P2PeerCon.h:255) and the only
+# call to it in the tree was P2PeerConWsa.cpp:1422; pipe, serial and DMX never
+# asked. Nothing looked absent at the base, which is why it went unnoticed:
+# P2PeerCon.h:237-238 deliberately supplies the decision and leaves the refusal
+# to the transport, "because only the transport knows how to discard a
+# half-accepted endpoint", and three of the four transports never wrote their
+# half. OpenCodeWork.md item 2.
+#
+# What the pipe had instead was an accident on one platform and nothing on the
+# other. CreateNamedPipe takes a literal nMaxInstances of 2
+# (P2PeerConPipe.cpp:491), so Windows capped at two clients however
+# SetMaxAccepted was set and the third failed inside the kernel; the Linux shim
+# ignores that argument and listens with a backlog of 8 (p2psock.h:404).
+#
+# THE CAP IS 1 AND NOT 2, which is the one design decision in this test worth
+# reading before changing. A cap of 2 needs three concurrent clients, and the
+# third cannot be served on Windows for the accidental reason above - so the
+# test would pass against a library that does nothing. At 1 the refusal lands
+# while the pipe still has an instance free and only the library can be
+# responsible for it. Same argument as p2p_srcbound's service cap of 16.
+#
+# PHASE 3 IS THE LOAD-BEARING ONE. A refusal that killed the listener reads
+# exactly like a refusal that worked, for as long as nobody knocks again, so
+# the first client is closed and a third must get in. It is not hypothetical:
+# the first draft of this refusal used DisconnectNamedPipe on both platforms,
+# which on Linux is a no-op returning TRUE and would have left m_hFile holding
+# a connected socket for Accept() to accept() on.
+#
+# TWO ctest entries out of one source, as p2p_acceptcap does. --uncapped is the
+# CONTROL: with SetMaxAccepted(0) both raw clients must be served, which
+# attributes the capped run's drop to the cap rather than to something about
+# raw CreateFile clients on a pipe. Run it first on any red.
+#
+# RESOURCE_LOCK on the NAME, not a port. This transport has no port, and two
+# tests sharing the probe pipe name would collide exactly as two sharing a port
+# do - more sharply, because CreateNamedPipe here passes
+# FILE_FLAG_FIRST_PIPE_INSTANCE and the second service THROWS.
+#   STATUS: PASSES        (measured 2026-09-20, Windows Debug)
+add_executable(p2p_pipecap p2p_pipecap.cpp)
+_mscs_test_common(p2p_pipecap)
+target_link_libraries(p2p_pipecap PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_pipecap COMMAND p2p_pipecap)
+set_tests_properties(p2p_pipecap PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK pipe_P2PcapProbe LABELS security)
+
+# p2p_pipecap_control: the uncapped control, its own ctest entry for
+# p2p_srcbound's reason - one mode, one verdict, one exit code. A phase spliced
+# into the run above would print a second RESULT line underneath the first.
+#   STATUS: PASSES        (measured 2026-09-20, Windows Debug)
+add_executable(p2p_pipecap_control p2p_pipecap.cpp)
+_mscs_test_common(p2p_pipecap_control)
+target_link_libraries(p2p_pipecap_control PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_pipecap_control COMMAND p2p_pipecap_control --uncapped)
+set_tests_properties(p2p_pipecap_control PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK pipe_P2PcapProbe LABELS security)
+
 # p2p_dmxcap: the same question again, asked of P2PeerConDmx - the in-process
 # transport, and the last of the four that OpenCodeWork.md item 2 named. The
 # decision helper AcceptAtCapacity() is on the base class (P2PeerCon.h:255);
@@ -963,6 +1021,7 @@ target_link_libraries(p2p_dmxdead_control PRIVATE targetcore msgcore p2pplatform
 add_test(NAME p2p_dmxdead_control COMMAND p2p_dmxdead_control --alive)
 set_tests_properties(p2p_dmxdead_control PROPERTIES
     TIMEOUT 120 LABELS security)
+
 
 # p2p_listenscope: can a SERVICE be told not to be reachable from off this
 # machine? Targetcore P2PeerConWsa::SetListenScope, added 2026-08-27.
