@@ -796,6 +796,74 @@ add_test(NAME p2p_srcbound COMMAND p2p_srcbound 7828 --source-only)
 set_tests_properties(p2p_srcbound PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7828 LABELS security)
 
+# p2p_dmxcap: the same question again, asked of P2PeerConDmx - the in-process
+# transport, and the last of the four that OpenCodeWork.md item 2 named. The
+# decision helper AcceptAtCapacity() is on the base class (P2PeerCon.h:255);
+# until this test the only callers were P2PeerConWsa.cpp:1422 and, since
+# 2026-09-20, P2PeerConPipe. DMX never asked.
+#
+# THE REFUSAL IS A DIFFERENT SHAPE HERE and the test is built around that. A
+# DMX link is two P2PeerConDmx objects in one address space pointing at each
+# other, and the CLIENT latches both back-pointers itself inside Connect()
+# before the service is asked anything (P2PeerConDmx.cpp:788-813). So the
+# service cannot decline a connection it has not adopted, the way Wsa does; it
+# has to detach one that is already attached, which is OnClose()'s sequence.
+#
+# NO RAW CLIENT, unlike p2p_acceptcap and p2p_pipecap. Those open the transport
+# by hand because the adversary does not run this library and will not complete
+# a handshake. In-process there is no such adversary - a hand-rolled DMX client
+# would just be a copy of Connect() - so the clients here are real hubs and the
+# bound being measured is narrower: resource exhaustion by components of this
+# process, not by a remote peer.
+#
+# THE CAP IS 1, for p2p_pipecap's reason carried over: a smaller cap puts the
+# refusal where only the library can be responsible for it.
+#
+# ITS THIRD PHASE IS NOT p2p_pipecap's THIRD PHASE, and the difference is a
+# measurement rather than a shortcut. There the first client is closed and a
+# later one must be served, which proves the accepted SLOT comes back. Here
+# the BOUND is raised instead, which proves the SERVICE is still listening
+# after it refused someone - the failure this refusal could plausibly cause,
+# since a refusal that forgets to drop the consumed accept leaves the
+# unconditional re-arm in P2PeerTarget::On_ConAccept throwing. The slot
+# version cannot be asserted because on this transport it is false: an
+# accepted P2PeerConDmx is never destroyed when its peer goes away, so it
+# holds its slot for the life of the hub. Measured 2026-09-20 with the client
+# hub closed AND destroyed - the count sat at 1 for ten further seconds. That
+# is a separate defect with two parts, both instrumented rather than argued,
+# and the head of p2p_dmxcap.cpp carries the evidence. OpenCodeWork.md records
+# it as its own row; closing it changes teardown on three transports and is
+# not something to do from one failing test.
+#
+# NO RESOURCE_LOCK, and that is the transport rather than an omission: every
+# link is a pointer handoff inside the test process. There is no port and no
+# pipe name for a parallel ctest job to collide with, so these two entries can
+# run alongside anything - including each other, which is why the control is
+# cheap here in a way it was not on the pipe.
+#   STATUS: PASSES        (measured 2026-09-20, Windows Debug)
+add_executable(p2p_dmxcap p2p_dmxcap.cpp)
+_mscs_test_common(p2p_dmxcap)
+target_link_libraries(p2p_dmxcap PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_dmxcap COMMAND p2p_dmxcap)
+set_tests_properties(p2p_dmxcap PROPERTIES
+    TIMEOUT 120 LABELS security)
+
+# Its OWN TARGET off the same source, and on this transport the control is
+# load-bearing rather than tidy. Nothing else in the tree shows that one DMX
+# service can hold two accepted connections at once; if it cannot, the capped
+# run's phase 2 passes against a library that does nothing at all. This entry
+# asserts the two clients are BOTH served when SetMaxAccepted(0) unbounds them,
+# which is what makes the capped run's refusal attributable to the cap. On the
+# pipe the equivalent control is what separated two defects that had looked
+# like one.
+#   STATUS: PASSES        (measured 2026-09-20, Windows Debug)
+add_executable(p2p_dmxcap_control p2p_dmxcap.cpp)
+_mscs_test_common(p2p_dmxcap_control)
+target_link_libraries(p2p_dmxcap_control PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_dmxcap_control COMMAND p2p_dmxcap_control --uncapped)
+set_tests_properties(p2p_dmxcap_control PROPERTIES
+    TIMEOUT 120 LABELS security)
+
 # p2p_listenscope: can a SERVICE be told not to be reachable from off this
 # machine? Targetcore P2PeerConWsa::SetListenScope, added 2026-08-27.
 #
