@@ -65,6 +65,7 @@
 #include "P2PeerMsg.h"
 #include "Msgexception.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -122,10 +123,17 @@ protected:
     }
 
 private:
-    const char   *m_lpszRole;
-    volatile bool m_bServed;
-    volatile bool m_bClosed;
-    volatile bool m_bGotMsg;
+    const char       *m_lpszRole;
+    //  std::atomic, NOT volatile.  These are written on the hub's pump
+    //  thread and read by the polling loop on the main thread, and volatile
+    //  orders nothing and publishes nothing - it only stops the compiler
+    //  caching the load.  Windows happened to behave; the Linux TSan gate
+    //  reported the race on the first run it ever saw these harnesses
+    //  (2026-09-21), which is the second time a test in this suite has been
+    //  the thing a sanitiser caught.
+    std::atomic<bool> m_bServed;
+    std::atomic<bool> m_bClosed;
+    std::atomic<bool> m_bGotMsg;
 };
 
 //  Polls rather than sleeping a fixed span, so a slow machine costs time
