@@ -232,6 +232,7 @@ int main ( int argc, char *argv[] )
         //  measuring whichever fired first
         pSvc -> SetMaxAccepted   ( xCap );
         pSvc -> SetLoginDeadline ( 0 );
+
         oServer.PostP2PeerCon ( pSvc );
         std::printf ( "[pipecap] service posted; SetMaxAccepted(%ld), deadline off\n",
                       xCap );
@@ -354,10 +355,28 @@ int main ( int argc, char *argv[] )
             const bool b3Opened = ( h3 != NULL );
             const bool b3Up     = b3Opened && !WasDroppedByServer ( h3, 1500 );
 
-            std::printf ( "[pipecap] third=%s (count=%ld)\n",
+            //  THE COUNT IS NOT PRINTED HERE, AND IT CANNOT BE.  pSvc is
+            //  not owned by this harness - PostP2PeerCon gave it to the hub -
+            //  and on this transport the service MORPHS: AcceptSpawn hands
+            //  the listening instance to the spawn, so by this point the
+            //  object the pointer was made from may already have been
+            //  released and deleted.  Reading it here is a use-after-free,
+            //  reported by the Linux TSan gate on 2026-09-21 and invisible on
+            //  Windows, where the freed memory still read as a plausible
+            //  number.
+            //      : AND IT CANNOT BE FIXED BY HOLDING A REFERENCE, which was
+            //        tried first.  The accept tally is given back by
+            //        ~P2PeerCon and by nothing else, so an AddRef that keeps
+            //        the object addressable also keeps its SLOT - phase 3
+            //        then reports count=1 and fails, having measured the
+            //        harness rather than the library.
+            //      : Nothing is lost. The verdict here is b3Up - whether a
+            //        third client is served once the first leaves - and the
+            //        count was only ever commentary beside it. Phase 2 still
+            //        prints it, from a point where the object is alive.
+            std::printf ( "[pipecap] third=%s\n",
                           !b3Opened ? "OPEN REFUSED"
-                          : b3Up     ? "up" : "CONNECTED THEN CLOSED",
-                          pSvc->GetAcceptedCount ( ) );
+                          : b3Up     ? "up" : "CONNECTED THEN CLOSED" );
             std::fflush ( stdout );
             RawClose ( h3 );
 
