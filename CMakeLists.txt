@@ -918,6 +918,52 @@ add_executable(p2p_dmxcap_slot p2p_dmxcap.cpp)
 _mscs_test_common(p2p_dmxcap_slot)
 target_link_libraries(p2p_dmxcap_slot PRIVATE targetcore msgcore p2pplatform)
 
+# p2p_dmxdead: does a DMX send to a peer that has GONE report that it failed,
+# or that it worked? OpenCodeWork.md item 7's SECOND exit criterion, and a
+# different defect from the row's main one: item 7 is about a connection that
+# is never told its peer left, this is about one that HAS been told and is
+# then asked to send.
+#
+# It reported that it worked. P2PeerioDmx::SendP2PeerMsg refuses when
+# GetUDState() is 0 - which on this transport is literally m_pConThat - by
+# writing hr = ERROR_OPERATION_ABORTED and posting. prepareOVERLAPPED()
+# assigns hr = S_OK and PostOVERLAPPED() calls it, so the abort was erased by
+# the post it was written for and the completion arrived a SUCCESS. The send
+# branch treats a success as delivered and DELETES THE MESSAGE
+# (P2PeerCon.cpp:691-697). So a message handed to a peer that no longer
+# exists was destroyed and the sender told it went.
+#
+# THE CONTROL IS LOAD-BEARING. The fix makes a dead-peer send drop the
+# connection, so something has to show that a send does not drop a connection
+# by being a send. --alive asserts the same message on the same call ARRIVES,
+# positively, and that nothing closes.
+#
+# ONLY THE SEND HALF IS FIXED AND GATED. The recv half of the identical
+# defect (P2PeerioDmx.cpp:177-181) is measured and deliberately untouched: with
+# it fixed, p2pweb_w6 SEGFAULTs at teardown - p2pweb wires its hub chain with
+# P2PeerConDmx, and a recv is re-armed constantly during shutdown, so turning a
+# silent re-arm into a connection drop reorders how every in-process chain
+# comes down. Measured 2026-09-21, one failure in the first run of the pair
+# fixed together, and five clean runs with the send half alone. That half goes
+# with item 7's teardown work.
+#
+# NO RESOURCE_LOCK: the link is a pointer handoff inside the test process.
+#   STATUS: PASSES        (measured 2026-09-21, Windows Debug)
+add_executable(p2p_dmxdead p2p_dmxdead.cpp)
+_mscs_test_common(p2p_dmxdead)
+target_link_libraries(p2p_dmxdead PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_dmxdead COMMAND p2p_dmxdead)
+set_tests_properties(p2p_dmxdead PROPERTIES
+    TIMEOUT 120 LABELS security)
+
+#   STATUS: PASSES        (measured 2026-09-21, Windows Debug)
+add_executable(p2p_dmxdead_control p2p_dmxdead.cpp)
+_mscs_test_common(p2p_dmxdead_control)
+target_link_libraries(p2p_dmxdead_control PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_dmxdead_control COMMAND p2p_dmxdead_control --alive)
+set_tests_properties(p2p_dmxdead_control PROPERTIES
+    TIMEOUT 120 LABELS security)
+
 # p2p_listenscope: can a SERVICE be told not to be reachable from off this
 # machine? Targetcore P2PeerConWsa::SetListenScope, added 2026-08-27.
 #
