@@ -826,14 +826,9 @@ set_tests_properties(p2p_srcbound PROPERTIES
 # after it refused someone - the failure this refusal could plausibly cause,
 # since a refusal that forgets to drop the consumed accept leaves the
 # unconditional re-arm in P2PeerTarget::On_ConAccept throwing. The slot
-# version cannot be asserted because on this transport it is false: an
-# accepted P2PeerConDmx is never destroyed when its peer goes away, so it
-# holds its slot for the life of the hub. Measured 2026-09-20 with the client
-# hub closed AND destroyed - the count sat at 1 for ten further seconds. That
-# is a separate defect with two parts, both instrumented rather than argued,
-# and the head of p2p_dmxcap.cpp carries the evidence. OpenCodeWork.md records
-# it as its own row; closing it changes teardown on three transports and is
-# not something to do from one failing test.
+# question is asked by p2p_dmxcap_slot below, which is BUILT BUT NOT GATED
+# because the answer is still no: on this transport the slot does not come
+# back, and that is OpenCodeWork.md item 7 - open, diagnosed, not closed.
 #
 # NO RESOURCE_LOCK, and that is the transport rather than an omission: every
 # link is a pointer handoff inside the test process. There is no port and no
@@ -863,6 +858,65 @@ target_link_libraries(p2p_dmxcap_control PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_dmxcap_control COMMAND p2p_dmxcap_control --uncapped)
 set_tests_properties(p2p_dmxcap_control PROPERTIES
     TIMEOUT 120 LABELS security)
+
+# p2p_dmxcap_slot: does a DEPARTING client give its accept slot back? This is
+# the question the two entries above cannot ask, and it is a DIFFERENT DEFECT
+# from the bound they measure - OpenCodeWork.md item 7, found by building
+# them.
+#
+# A THIRD TARGET RATHER THAN A FOURTH PHASE, deliberately. p2p_dmxcap answers
+# "does the bound bind"; this answers "is the bound a concurrency limit or a
+# lifetime total". A binary that can go red for two unrelated reasons tells
+# whoever reads the CI line neither of them, and these two regress
+# independently: the first is about OnAccept, the second about teardown.
+#
+# It asks two things in order because they fail differently. First the
+# accounting: GetAcceptedCount() must return to 0 once the client's hub is
+# closed, joined AND destroyed - the count is decremented by ~P2PeerCon and
+# nothing else (P2PeerCon.cpp:146-151, the only release path, deliberately),
+# so a count that does not move means the accepted connection is still alive.
+# Then the consequence: a later client must actually be served in the freed
+# slot, which can fail even when the accounting is right, if the service
+# stopped listening.
+#
+# BUILT BUT NOT GATED, and NOT because it is unfinished - because it is RED,
+# and the defect it is red on is not one that can be closed from here.
+# teardown_stress below is built the same way for the same kind of reason.
+# There is deliberately no add_test and deliberately no WILL_FAIL: a red entry
+# would break CI and a WILL_FAIL one would make CI green on a live defect,
+# which this file refuses everywhere else. Run it by hand:
+#     build/windows-msvc/MscsUnitTests/Debug/p2p_dmxcap_slot.exe --slotreturn
+#
+# WHAT IT REPORTS TODAY (measured 2026-09-21, Windows Debug): the client hub
+# is closed, joined and destroyed, and the service's GetAcceptedCount() is
+# still 1 ten seconds later. So SetMaxAccepted() on this transport is a
+# LIFETIME TOTAL, not the concurrency limit P2PeerCon.h:242 documents.
+#
+# A FIX WAS BUILT AND REVERTED, and the reason is worth the paragraph. Three
+# causes were found and fixed, each only visible once the one before it was:
+# the wake in P2PeerConDmx::Drop() required the peer to have a QUEUED recv,
+# which an idle in-process link never has; P2PeerConDmx::OnClose() never
+# destroyed an accepted connection and COULD NOT, because three transports
+# declared a non-virtual Destroy() that hid P2PeerConPlc::Destroy() and that
+# nothing defined; and the wake still did not wake, because PostOVERLAPPED()
+# calls prepareOVERLAPPED(), which assigns hr = S_OK - so all four sites in
+# the tree that set hr = ERROR_OPERATION_ABORTED before posting were posting a
+# SUCCESS. With all three fixed this entry passes.
+#
+# It was reverted because it destabilised the suite: p2pweb wires its hub
+# chain with P2PeerConDmx (WebChainBuilder.cpp:477), and p2pweb_w6 began
+# SEGFAULTing at teardown after its last assertion, in roughly half of all
+# runs on 2026-09-21 - confirmed against a reverted library, not assumed. Cause:
+# is that the bQueued guard was doing TWO jobs: P2PeerCon.cpp:1287-1300 states
+# that a queued member OVERLAPPED also means one reference is held and the
+# connection cannot reach zero. Waking an IDLE peer therefore posts to a
+# connection with no references at all. Holding a reference across the post
+# did not settle it either. Closing this properly is reference-safe peer
+# notification in a refcounted teardown - a design change to DMX, not a patch.
+# OpenCodeWork.md item 7 carries the full measurement.
+add_executable(p2p_dmxcap_slot p2p_dmxcap.cpp)
+_mscs_test_common(p2p_dmxcap_slot)
+target_link_libraries(p2p_dmxcap_slot PRIVATE targetcore msgcore p2pplatform)
 
 # p2p_listenscope: can a SERVICE be told not to be reachable from off this
 # machine? Targetcore P2PeerConWsa::SetListenScope, added 2026-08-27.

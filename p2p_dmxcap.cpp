@@ -70,35 +70,40 @@
 //   accept in place and the re-arm at the tail of P2PeerTarget::On_ConAccept
 //   throws, after which the service is not listening at all.
 //
-// WHAT THIS GATE DOES **NOT** ESTABLISH, and the omission is measured rather
-// than an oversight. p2p_pipecap closes its first client and requires a later
-// one to be served, which is what proves the accepted SLOT is given back.
-// That cannot be asserted here, because on this transport it is not true, and
-// the cause is a different defect:
+// WHAT THIS RUN DOES NOT ESTABLISH, AND WHICH RUN DOES. p2p_pipecap closes
+// its first client and requires a later one to be served, which is what
+// proves the accepted SLOT is given back. That question is asked here too,
+// but by a SEPARATE MODE and a separate ctest entry - p2p_dmxcap_slot,
+// --slotreturn, at the foot of this file. It is separate because it is a
+// separate defect: this run answers "does the bound bind" and that one
+// answers "is the bound a concurrency limit or a lifetime total", and a
+// binary that can go red for both tells whoever reads the CI line neither.
 //
-//   An accepted P2PeerConDmx is never destroyed when its peer goes away, so
-//   its accept slot is held for the life of the hub. Measured 2026-09-20:
-//   with client A hub CLOSED AND ITS OBJECT DESTROYED, the service
-//   GetAcceptedCount() sat at 1 for a further ten seconds and client C was
-//   refused. Instrumenting the library showed why, in two steps.
-//   P2PeerConDmx::Drop() wakes the peer only when the peer has a QUEUED recv
-//   (:454-461) - and on an idle in-process link there is none, because a Dmx
-//   "recv" is queued by the SENDER, so the one moment the peer must be woken
-//   is the one moment that guard is false. And even once it is woken, nothing
-//   destroys it: P2PeerConWsa::OnClose() ends with "Accepted connections MUST
-//   always be destroyed and any form of restart blocked" and calls Destroy()
-//   (P2PeerConWsa.cpp:2305-2307); P2PeerConDmx::OnClose() has no such line
-//   and could not be given one as things stand - P2PeerConDmx, P2PeerConPipe
-//   and P2PeerCon232 each DECLARE a non-virtual Destroy() that hides
-//   P2PeerConPlc::Destroy() and that nothing in the tree defines, so the call
-//   does not link. That was found by making it and reading the linker error.
-//
-//   It is a resource leak on the in-process transport, and it is a row of its
-//   own rather than this one: closing it changes connection teardown for
-//   three transports, and doing that from one failing test is the unmeasured
-//   change this project keeps being bitten by. OpenCodeWork.md records it.
-//   Until it is closed, this gate proves the cap BINDS and does not prove the
-//   slot RETURNS.
+//   When this file was first written the slot question could not be asked at
+//   all, because the answer was no and the cause was three defects deep. It
+//   is recorded here because the shape is worth keeping: an accepted
+//   P2PeerConDmx was never destroyed when its peer went away, so it held its
+//   slot for the life of the hub, and SetMaxAccepted(n) was a LIFETIME TOTAL
+//   on this transport rather than the concurrency limit P2PeerCon.h:242
+//   documents. Three things had to be fixed, each found only after the one
+//   before it was: P2PeerConDmx::Drop() woke the peer only when the peer had
+//   a QUEUED recv, and on an idle in-process link there is none because a Dmx
+//   "recv" is queued by the SENDER; P2PeerConDmx::OnClose() never destroyed
+//   an accepted connection the way P2PeerConWsa::OnClose() does and says it
+//   MUST, and could not be made to, because P2PeerConDmx, P2PeerConPipe and
+//   P2PeerCon232 each DECLARED a non-virtual Destroy() that hid
+//   P2PeerConPlc::Destroy() and that nothing in the tree defined - found by
+//   writing the call and reading the linker error; and finally the wake did
+//   not wake, because PostOVERLAPPED() calls prepareOVERLAPPED(), which
+//   assigns hr = S_OK, so an hr written by the caller before the post was
+//   erased BY the post - measured as hr=0x00000000 at the completion where
+//   ERROR_OPERATION_ABORTED had been written one line earlier. A fix for all
+//   three was built, made this mode pass, AND WAS REVERTED: it destabilised
+//   p2pweb, which wires its hub chain with P2PeerConDmx, because the bQueued
+//   guard was ALSO a liveness guard - P2PeerCon.cpp:1287-1300 - so waking an
+//   idle peer posts to a connection holding no references. So --slotreturn is
+//   RED today and is built but NOT gated. OpenCodeWork.md item 7 has all of
+//   it, including the three sites that still pre-assign hr.
 //
 // THE CONTROL IS A SEPARATE CTEST ENTRY, --uncapped, and on this transport it
 // is not optional. Nothing here proves a priori that one DMX service can hold
@@ -205,14 +210,223 @@ static bool WaitServed ( const DmxCapHub &oHub, DWORD dwWaitMs )
     }
 }
 
+//  ---------------------------------------------------------------------
+//  THE SLOT-RETURN RUN (--slotreturn), which is OpenCodeWork.md item 7
+//
+//  This is p2p_pipecap's third phase, asked of DMX: a client that LEAVES
+//  must give its accept slot back, or SetMaxAccepted(n) is a lifetime
+//  total rather than a concurrency limit.
+//
+//  IT IS A SEPARATE MODE RATHER THAN A FOURTH PHASE OF THE CAPPED RUN, on
+//  purpose.  p2p_dmxcap answers item 2 - does the bound BIND - and the two
+//  findings should not share a verdict: a binary that can go red for two
+//  unrelated reasons tells whoever reads the CI line neither of them.  The
+//  capped and control paths below are untouched by this function.
+//
+//  WHAT IT DOES: caps at one, gets client A served, then closes A's hub,
+//  waits for its thread, closes its handle AND DESTROYS THE HUB OBJECT -
+//  so nothing the client owns is still alive - and then asks two questions
+//  in order, because they fail differently:
+//
+//    1. does GetAcceptedCount() return to 0?  This is the register's
+//       "cheaper criterion that fails faster and says less".  It is the
+//       accounting question, and it is answered by the accepted
+//       connection's DESTRUCTOR (P2PeerCon.cpp:146-151 - the only release
+//       path, deliberately), so a count that stays at 1 means the object
+//       is still alive.
+//    2. can a later client be served?  This is the criterion that matters
+//       to an operator, and it can fail even if (1) passes - a slot given
+//       back by a service that has stopped listening is no use.
+//
+//  THE WAIT IS GENEROUS AND POLLED rather than a single sleep: teardown
+//  here crosses two pump threads and a refcount, and a fixed sleep would
+//  turn a slow machine into a false FAIL.  Ten seconds is far longer than
+//  the in-process path needs when it works at all - when this was first
+//  measured the count did not move in ten seconds, and that is not a
+//  timing margin, it is a leak.
+static int RunSlotReturn ( )
+{
+    std::printf ( "=== p2p_dmxcap - does a departing DMX client give its "
+                  "slot back? ===\n" );
+    std::printf ( "Service : %ls\n", (LPCWSTR)kServiceName );
+    std::printf ( "Asserting: against SetMaxAccepted(1), a client that closes\n"
+                  "           AND is destroyed returns its accept slot, and a\n"
+                  "           later client is served in it.\n\n" );
+    std::fflush ( stdout );
+
+    DmxCapHub oServer ( kServerAddr, "SERVER" );
+    oServer.RequireAuth ( false );
+    HANDLE hServer = oServer.SpawnHub ( );
+    if ( !hServer ) { Log ( "SETUP: server SpawnHub() failed" ); return 2; }
+
+    P2PeerConDmx *pSvc = P2PeerConDmx::ServiceFactory ( kClientAddrA, kServiceName );
+    if ( !pSvc ) { Log ( "SETUP: ServiceFactory failed" ); return 2; }
+    pSvc -> SetMaxAccepted   ( 1 );
+    pSvc -> SetLoginDeadline ( 0 );
+    oServer.PostP2PeerCon ( pSvc );
+    Log ( "service posted; SetMaxAccepted(1), deadline off" );
+    Sleep ( 750 );
+
+    int nExit = 2;
+
+    // ---- Phase 1: client A takes the only slot --------------------------
+    Log ( "--- phase 1: client A takes the only slot ---" );
+    bool bAServed = false;
+    {
+        //  Heap-allocated and destroyed inside this block, because the
+        //  question below is whether the SERVICE's accepted connection
+        //  survives the client, and a client hub still sitting on the stack
+        //  would leave that ambiguous
+        DmxCapHub *pClientA = new DmxCapHub ( kClientAddrA, "CLIENT-A" );
+        pClientA -> RequireAuth ( false );
+        HANDLE hClientA = pClientA -> SpawnHub ( );
+        if ( !hClientA )
+        {
+            Log ( "SETUP: client A SpawnHub() failed" );
+            delete pClientA;
+            oServer.CloseHub ( );
+            WaitForSingleObject ( hServer, 3000 ); CloseHandle ( hServer );
+            return 2;
+        }
+        pClientA -> PostP2PeerCon (
+            P2PeerConDmx::ClientFactory ( kServerAddr, kServiceName ) );
+
+        bAServed = WaitServed ( *pClientA, 8000 );
+        std::printf ( "[dmxcap] A=%s (count=%ld of max 1)\n",
+                      bAServed ? "served" : "NOT SERVED",
+                      pSvc->GetAcceptedCount ( ) );
+        std::fflush ( stdout );
+
+        if ( !bAServed || pSvc->GetAcceptedCount ( ) != 1 )
+        {
+            std::printf (
+              "\nRESULT: SETUP - the first client never took the slot, so\n"
+              "  there is nothing here to give back.  p2p_dmxcap covers the\n"
+              "  accept path itself; run it first.\n" );
+            pClientA -> CloseHub ( );
+            WaitForSingleObject ( hClientA, 3000 ); CloseHandle ( hClientA );
+            delete pClientA;
+            oServer.CloseHub ( );
+            WaitForSingleObject ( hServer, 3000 ); CloseHandle ( hServer );
+            return 2;
+        }
+
+        // ---- Phase 2: client A leaves, completely -----------------------
+        Log ( "--- phase 2: client A closes, joins and is destroyed ---" );
+        pClientA -> CloseHub ( );
+        WaitForSingleObject ( hClientA, 5000 );
+        CloseHandle ( hClientA );
+        delete pClientA;
+        Log ( "client A destroyed" );
+    }
+
+    //  Poll rather than sleep once - see the note above
+    long lCount = pSvc->GetAcceptedCount ( );
+    for ( DWORD dwWaited = 0; lCount != 0 && dwWaited < 10000; dwWaited += 250 )
+    {
+      Sleep ( 250 );
+      lCount = pSvc->GetAcceptedCount ( );
+    }
+    std::printf ( "[dmxcap] after A is gone: count=%ld\n", lCount );
+    std::fflush ( stdout );
+
+    if ( lCount != 0 )
+    {
+        std::printf (
+          "\nRESULT: FAIL - THE SLOT NEVER CAME BACK (count=%ld).\n"
+          "  Client A's hub is closed, joined and DESTROYED, and the\n"
+          "  service still counts its connection.  The count is decremented\n"
+          "  by ~P2PeerCon (P2PeerCon.cpp:146-151, the only release path),\n"
+          "  so a count that does not move means the accepted connection\n"
+          "  object is still alive.  Two things have to be true for it to\n"
+          "  die, and this gate cannot say which of them failed:\n"
+          "    (a) the departing peer must TELL it.  P2PeerConDmx::Drop()\n"
+          "        aborts the peer's recv OVERLAPPED only when that recv is\n"
+          "        already queued - and on an idle in-process link it is\n"
+          "        not, because a Dmx recv is queued by the SENDER.\n"
+          "    (b) once told, an accepted connection must be destroyed, the\n"
+          "        way P2PeerConWsa::OnClose() destroys one and says it MUST\n"
+          "        always be.\n"
+          "  This is OpenCodeWork.md item 7.\n", lCount );
+        nExit = 1;
+    }
+    else
+    {
+        // ---- Phase 3: the freed slot is usable --------------------------
+        Log ( "--- phase 3: client B must be served in the freed slot ---" );
+        DmxCapHub oClientB ( kClientAddrB, "CLIENT-B" );
+        oClientB.RequireAuth ( false );
+        HANDLE hClientB = oClientB.SpawnHub ( );
+        if ( !hClientB ) { Log ( "SETUP: client B SpawnHub() failed" ); return 2; }
+        oClientB.PostP2PeerCon (
+            P2PeerConDmx::ClientFactory ( kServerAddr, kServiceName ) );
+
+        const bool bBServed = WaitServed ( oClientB, 8000 );
+        std::printf ( "[dmxcap] B=%s (count=%ld of max 1)\n",
+                      bBServed ? "served" : "NOT SERVED",
+                      pSvc->GetAcceptedCount ( ) );
+        std::fflush ( stdout );
+
+        if ( bBServed )
+        {
+            std::printf (
+              "\nRESULT: PASS - the slot returns and is reusable.\n"
+              "  Against SetMaxAccepted(1) a client was served, left, and a\n"
+              "  second was served in its place.  So the bound is a limit on\n"
+              "  CONCURRENT accepted connections, which is what\n"
+              "  P2PeerCon.h:242 documents, and not a lifetime total.\n" );
+            nExit = 0;
+        }
+        else
+        {
+            std::printf (
+              "\nRESULT: FAIL - THE SLOT CAME BACK AND IS NOT USABLE.\n"
+              "  The count returned to 0, so the accepted connection was\n"
+              "  destroyed - but the next client was refused anyway.  The\n"
+              "  accounting is right and the SERVICE is the problem: suspect\n"
+              "  the listener, not the bound.  A service torn down alongside\n"
+              "  the connection that was accepted on it, or an accept that\n"
+              "  was consumed and never re-armed, both read like this.\n" );
+            nExit = 1;
+        }
+
+        oClientB.CloseHub ( );
+        WaitForSingleObject ( hClientB, 3000 );
+        CloseHandle ( hClientB );
+    }
+
+    Log ( "shutdown begin" );
+    oServer.CloseHub ( );
+    WaitForSingleObject ( hServer, 3000 );
+    CloseHandle ( hServer );
+    return nExit;
+}
+
 int main ( int argc, char *argv[] )
 {
-    bool bUncapped = false;
+    bool bUncapped   = false;
+    bool bSlotReturn = false;
     for ( int i = 1; i < argc; ++i )
-      if ( std::strcmp ( argv[i], "--uncapped" ) == 0 )
-        bUncapped = true;
+    {
+      if ( std::strcmp ( argv[i], "--uncapped"   ) == 0 ) bUncapped   = true;
+      if ( std::strcmp ( argv[i], "--slotreturn" ) == 0 ) bSlotReturn = true;
+    }
 
     const long xCap = bUncapped ? 0 : 1;
+
+    //  DISPATCHED BEFORE THE BANNER BELOW, so the slot-return run does not
+    //  open by printing the capped run's heading.  It shares this file's
+    //  hub, service and wait scaffolding and nothing else
+    if ( bSlotReturn )
+    {
+        if ( !StartupP2Pmsg ( 16 ) )
+          { Log ( "SETUP: StartupP2Pmsg() failed" ); return 2; }
+        const int nSlot = RunSlotReturn ( );
+        CleanupP2Pmsg ( );
+        std::printf ( "Done (exit=%d).\n", nSlot );
+        std::fflush ( stdout );
+        return nSlot;
+    }
 
     std::printf ( "=== p2p_dmxcap - the accept cap on the DMX transport%s ===\n",
                   bUncapped ? " (CONTROL: uncapped)" : "" );
@@ -374,9 +588,8 @@ int main ( int argc, char *argv[] )
                   "  refused while the first stayed up, and with the bound\n"
                   "  raised a third was served.  So the refusal is the bound\n"
                   "  and not a listener that died at the first refusal.\n"
-                  "  NOT PROVEN HERE: that a departing client gives its slot\n"
-                  "  back.  It does not, for a reason that is a separate\n"
-                  "  defect - read the note at the head of this file.\n" );
+                  "  NOT ASKED HERE: whether a departing client gives its slot\n"
+                  "  back.  That is p2p_dmxcap_slot, --slotreturn.\n" );
                 nExit = 0;
             }
             else
