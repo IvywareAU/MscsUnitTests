@@ -835,48 +835,42 @@ set_tests_properties(p2p_srcbound PROPERTIES
 # tests sharing the probe pipe name would collide exactly as two sharing a port
 # do - more sharply, because CreateNamedPipe here passes
 # FILE_FLAG_FIRST_PIPE_INSTANCE and the second service THROWS.
-# GATED ON WINDOWS ONLY, AND NOT TO MAKE CI GREEN - measured 2026-09-21. On
-# Linux this run FAILS phase 3: the first raw client leaves and a third cannot
-# even OPEN the pipe ("third=OPEN REFUSED"), with the library reporting
-# "IOCP already created / Incomplete reset or sequence bug" from CreateIOCP
-# during phase 2. Phases 1 and 2 pass there - the cap DOES bind on Linux - so
-# what is unproven on that platform is specifically the listener's recovery
-# after a client departs, which is the Linux named-pipe emulation
-# (Msgcore/Platform/p2pfile.h maps \\.\pipe\ onto AF_UNIX) rather than the
-# accept bound this row is about.
+# GATED ON BOTH PLATFORMS AGAIN, and the Windows-only scoping of 2026-09-21
+# is reverted rather than left standing beside a note. That retreat was taken
+# because phase 3 failed on Linux - the first raw client left and a third
+# could not even OPEN the pipe - while the library reported "IOCP already
+# created / Incomplete reset or sequence bug" from CreateIOCP during phase 2,
+# and nobody had yet answered whether that line was cause or symptom.
 #
-# The EXECUTABLES are still built on both platforms, so the code cannot rot
-# and the failure can be reproduced by hand on Linux at any time. It is only
-# the ctest registration that is Windows-only, and OpenCodeWork.md carries it
-# as an open row with the evidence. seal_interop above is scoped the same way
-# for a comparable reason.
-#   STATUS: PASSES        (measured 2026-09-21, Windows Debug)
+# IT WAS THE CAUSE. The Linux refusal in P2PeerConPipe::OnAccept() closed
+# m_hFile and nulled it but left m_hFileCPort holding the association of a
+# file that no longer existed, so the re-arm's CreateListenPipe() reached
+# CreateIOCP() - which refuses outright on a non-zero m_hFileCPort - and THREW
+# inside accept processing. The listener was never rebuilt, which is precisely
+# what phase 3 exists to tell apart from a refusal that works. Clearing the
+# association with the handle, as Drop() and OnClose() on that transport have
+# always done, is the whole fix.
+#   STATUS: PASSES        (measured 2026-09-21, Linux gcc TSan)
 add_executable(p2p_pipecap p2p_pipecap.cpp)
 _mscs_test_common(p2p_pipecap)
 target_link_libraries(p2p_pipecap PRIVATE targetcore msgcore p2pplatform)
-if(WIN32)
-    add_test(NAME p2p_pipecap COMMAND p2p_pipecap)
-    set_tests_properties(p2p_pipecap PROPERTIES
-        TIMEOUT 120 RESOURCE_LOCK pipe_P2PcapProbe LABELS security)
-endif()
+add_test(NAME p2p_pipecap COMMAND p2p_pipecap)
+set_tests_properties(p2p_pipecap PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK pipe_P2PcapProbe LABELS security)
 
 # p2p_pipecap_control: the uncapped control, its own ctest entry for
 # p2p_srcbound's reason - one mode, one verdict, one exit code. A phase spliced
 # into the run above would print a second RESULT line underneath the first.
-# WINDOWS ONLY TOO, and that is deliberate rather than consequential: this
-# control exists to make the capped run's refusal attributable, so running it
-# on a platform where the capped run is not registered would assert nothing
-# about anything. It PASSES on Linux today; that is recorded and is not a
-# reason to keep it.
-#   STATUS: PASSES        (measured 2026-09-21, Windows Debug)
+# BOTH PLATFORMS AGAIN, alongside the run it makes attributable - a control
+# registered where the capped run is not would assert nothing about anything,
+# which is why it was scoped and unscoped with it rather than on its own.
+#   STATUS: PASSES        (measured 2026-09-21, Linux gcc TSan)
 add_executable(p2p_pipecap_control p2p_pipecap.cpp)
 _mscs_test_common(p2p_pipecap_control)
 target_link_libraries(p2p_pipecap_control PRIVATE targetcore msgcore p2pplatform)
-if(WIN32)
-    add_test(NAME p2p_pipecap_control COMMAND p2p_pipecap_control --uncapped)
-    set_tests_properties(p2p_pipecap_control PROPERTIES
-        TIMEOUT 120 RESOURCE_LOCK pipe_P2PcapProbe LABELS security)
-endif()
+add_test(NAME p2p_pipecap_control COMMAND p2p_pipecap_control --uncapped)
+set_tests_properties(p2p_pipecap_control PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK pipe_P2PcapProbe LABELS security)
 
 # p2p_dmxcap: the same question again, asked of P2PeerConDmx - the in-process
 # transport, and the last of the four that OpenCodeWork.md item 2 named. The
