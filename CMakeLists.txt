@@ -587,25 +587,111 @@ set_tests_properties(p2p_sealhop PROPERTIES
 # went unencrypted; it was that the exemption was inherited from a re-addressing
 # accident and nobody had chosen it.
 #
-# The negative checks were run rather than assumed, both on 2026-08-25 before
-# this was committed:
+# Phase 6 was added 2026-09-22, when On_P2PeerUCast stopped being dead code.
+#
+#   P2Pmsg_UCast (P2PeerMsg.h)  the upcast relay is the mirror of the broadcast
+#     one - a copy per PARENT link, each parent delivering it locally before
+#     relaying on - so an upcast climbs to the root and every ancestor receives
+#     it. What the origin addressed is a CHAIN, no more sealable than a
+#     subtree, and refused on the default exactly as phase 3's broadcast is.
+#     The obvious symmetry would have had it stamp TMsg_Scp, which would have
+#     made RequireSealBroadcast(false) - a setting deployments have already
+#     recorded - start exempting a second class of traffic on a relay that did
+#     not exist when they recorded it. It stamps TMsg_Ups instead, and
+#     RequireSealUpcast is its own switch. Phase 6 holds the two apart: 6a is
+#     the guard (SealBcast(false) alone must NOT reach the upcast) and 6b is
+#     its control (SealUcast(false) must), because 6a alone is satisfied by an
+#     upcast that could not be sent for any reason at all.
+#
+# The negative checks were run rather than assumed, on 2026-08-25 and
+# 2026-09-22, each before the change it guards was committed:
 #   revert AttestAppMsgOutbound alone to GetDestin  -> phase 4 red,
 #     "signature does not verify" plus a dropped link;
 #   drop the HasScope() test from the exemption     -> phase 5 red,
-#     "PLAINTEXT - EXEMPTION LEAKED" on the unicast line.
+#     "PLAINTEXT - EXEMPTION LEAKED" on the unicast line;
+#   widen that same test to IsFannedOut()           -> phase 6a red,
+#     "CARRIED - THE EXEMPTION LEAKED". That is the tidier-looking form of the
+#     line and the whole reason the second switch exists.
 #
 # Same rules as the gate tests above: no WILL_FAIL - that would make CI green on
 # an open hole and then "fail" the day it is closed - and labelled `security`.
 # Exit 3 (inconclusive) is NOT a pass and ctest reads it as a failure.
-#   STATUS: PASSES, all 5 phases.
-#           (Windows Debug, Windows Release and Linux gcc/OpenSSL, all 2026-08-25
-#            and all byte-identical.)
+#   STATUS: PASSES, all 6 phases.
+#           (Phases 1-5 on Windows Debug, Windows Release and Linux gcc/OpenSSL,
+#            all 2026-08-25 and all byte-identical. Phase 6 on Windows Debug
+#            2026-09-22; the other two platforms answer in CI.)
 add_executable(p2p_sealbcast p2p_sealbcast.cpp)
 _mscs_test_common(p2p_sealbcast)
 target_link_libraries(p2p_sealbcast PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_sealbcast COMMAND p2p_sealbcast 7846)
 set_tests_properties(p2p_sealbcast PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7846 LABELS security)
+
+# p2p_ucastgate: the upcast relay, and the bound nothing could measure.
+#
+# P2PeerHub::On_P2PeerUCast is the mirror of On_P2PeerBCast and was DEAD CODE
+# with live-looking dependants until 2026-09-22. There was no P2Pmsg_UCast ID
+# in the tree, no entry for one in P2PeerHub's message map and no other caller
+# of the virtual - while ConState_UCasts and ConUCasts_OK were declared, three
+# applications set the bit believing it routed something, and nine harnesses in
+# this suite overrode the handler as though it fired, one of them
+# (p2p_authgate.cpp:153) treating a call to it as a BREACH. A protection
+# asserting that something never happens, over a path on which nothing can
+# happen, is a green light that means nothing.
+#
+# The gate inside it was wrong as well, and the two facts are related:
+#
+#   P2PeerHub.cpp  the upcast bound read `!pCon->GetState(ConUCasts_OK)`.
+#     GetState returns m_dwState & dwMask, so testing it as a bool admits a
+#     connection carrying ANY ONE of the three bits - and ConState_Send is set
+#     on every accepted and every connected connection there is. It was the
+#     only place in the library that tested state with the masked accessor;
+#     On_P2PeerBCast four lines of intent away has always used HasState.
+#
+# THE FIX WENT IN UNGATED ON 2026-09-22 AND SAID SO, because a test that offers
+# an upcast to a connection lacking ConState_UCasts could not be written: no
+# test could offer an upcast to anything. The register counted that row among
+# the ungated ones and left the real decision open - delete the relay, or wire
+# it up and write this test in the same change. This is the second half of that
+# decision, and the relay is now wired: a P2Pmsg_UCast ID, a map entry, and
+# TMsg_Ups so the origin's address survives the fan-out's re-addressing.
+#
+# Three phases, and two of them are about the loop's predicate rather than
+# about traffic:
+#
+#   1 CONTROL     the leaf upcasts and BOTH ancestors receive it, with the top
+#                 reading the LEAF's address out of TMsg_Ups. Without this,
+#                 phase 2 measures an empty loop and passes for the wrong
+#                 reason - which is exactly how the previous exit criterion for
+#                 this row came to name a test that could not exist.
+#   2 THE GATE    ConState_UCasts cleared on the middle's link to the top, and
+#                 nothing else. The upcast must reach the middle and must not
+#                 reach the top.
+#   3 DIRECTION   the middle upcasts; the top sees it and the LEAF does not.
+#                 The gate is two tests joined by ||, and phase 2 exercises one
+#                 of them - a relay with the state bit right that enumerated
+#                 every connection would pass phase 2 and flood the tree.
+#
+# MEASURED RED 2026-09-22 against the GetState form of the line: phase 2 fails,
+# "the TOP received an upcast over a connection that does not carry
+# ConState_UCasts", because the connection still holds Send and Login after the
+# clear. Phase 1 stays green in that run, which is what makes the pair a
+# measurement rather than two assertions.
+#
+# Sealing is OFF here, and not for local convenience: an upcast on a sealing
+# hub is REFUSED by design, because a chain of ancestors is no more sealable
+# than a subtree, so a routing test that left it on would measure the refusal
+# and never reach the gate. That refusal and the RequireSealUpcast switch are
+# p2p_sealbcast phase 6.
+#
+# No WILL_FAIL, labelled `security`, and exit 3 (inconclusive) is NOT a pass.
+#   STATUS: PASSES, all 3 phases.
+add_executable(p2p_ucastgate p2p_ucastgate.cpp)
+_mscs_test_common(p2p_ucastgate)
+target_link_libraries(p2p_ucastgate PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_ucastgate COMMAND p2p_ucastgate 7860)
+set_tests_properties(p2p_ucastgate PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK loopback_7860 LABELS security)
 
 # p2p_acceptcap: the gate for the peer that says NOTHING. Every other gate here
 # asks about a peer that has spoken - is its login real, is its source bound,

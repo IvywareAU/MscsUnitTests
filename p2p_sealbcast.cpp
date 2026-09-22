@@ -118,6 +118,38 @@
 //     signing no longer verifies. The leaf refuses it with "signature does not
 //     verify" and drops the link. One mechanism, two protections, both lost.
 //
+//   Phase 6 (THE OTHER FAN-OUT) — added 2026-09-22, when On_P2PeerUCast stopped
+//     being dead code. It is the mirror of the broadcast relay: a copy per
+//     PARENT link, each parent delivering it locally before relaying it on, so
+//     an upcast climbs to the root and every ancestor receives it. What the
+//     origin addressed is a CHAIN — no more sealable than a subtree, and
+//     refused on the default for the same reason phase 3's broadcast is.
+//
+//     WHY IT IS A PHASE HERE RATHER THAN A NOTE SOMEWHERE. Until the relay was
+//     wired up there was no P2Pmsg_UCast ID and no map entry, which is why
+//     SealAppMsgOutbound's header could say TMsg_Scp was stamped by both
+//     relays and be vacuously right. The obvious symmetry — stamp the same
+//     scope — would have made that sentence true and the TEST beneath it
+//     wrong in one commit: RequireSealBroadcast(false), a setting deployments
+//     have already recorded, would have begun exempting traffic on a relay
+//     that did not exist when they recorded it. So the upcast stamps TMsg_Ups
+//     and RequireSealUpcast is its own switch, and this phase is what holds
+//     the two apart:
+//
+//       6a  phase 5's policy unchanged — sealing ON, broadcasts exempt. The
+//           upcast must be REFUSED at the sender; the keyless carrier never
+//           holds it.
+//       6b  RequireSealUpcast(false) as well. Now it is exempt and the carrier
+//           reads it in clear.
+//
+//     6a is the guard and 6b is its control — without 6b, 6a is satisfied by
+//     an upcast that could not be sent for any reason at all.
+//
+//     The negative check was RUN rather than assumed, 2026-09-22 before this
+//     was committed: widen the exemption at P2PeerCon.cpp to IsFannedOut() —
+//     which is exactly the tidier-looking mistake — and 6a turns red,
+//     "CARRIED - THE EXEMPTION LEAKED".
+//
 //   SEALING IS NOT CONFIGURED HERE, IT IS ASSERTED. RequireSeal has been on by
 //   default since 2026-08-21 (ProductionPlan.md Stage 3 step 20); this test
 //   reads IsSealRequired() back on all three hubs and refuses to run if it is
@@ -176,6 +208,7 @@ static const P2PaddrSTR kDomain   = L"Bc.*";
 static const char kUniTag[]   = "UNICAST-secret-tarragon-5150";
 static const char kBcastTag[] = "BROADCAST-secret-juniper-8802";
 static const char kShortTag[] = "SHORT-secret-marjoram-3310";
+static const char kUcastTag[] = "UPCAST-secret-fenugreek-6041";
 
 //  PHASES 1 AND 2 USE A LONG BODY ON PURPOSE. Anything at or under 255 bytes is
 //  held in a BLOB08 descriptor that the seal cannot grow past - which is what
@@ -187,6 +220,7 @@ static const size_t kShortBody = 28;
 static std::string g_sUniBody;
 static std::string g_sBcastBody;
 static std::string g_sShortBody;
+static std::string g_sUcastBody;
 
 static HANDLE g_hLeafUni   = NULL;   // phase 1 reached the leaf
 static HANDLE g_hLeafBcast = NULL;   // phase 2 reached the leaf
@@ -204,6 +238,12 @@ static volatile bool g_bMidCarriedBcast  = false;
 static volatile bool g_bMidSawBcastPlain = false;
 static volatile bool g_bMidBcastMarked   = false;
 static volatile bool g_bMidSawShortPlain = false;
+//  Phase 6, the OTHER fan-out. Kept apart from the broadcast pair above and
+//  not folded into them, because the whole of phase 6 is that the two are not
+//  the same traffic and are not governed by the same switch.
+static volatile bool g_bMidCarriedUcast  = false;
+static volatile bool g_bMidSawUcastPlain = false;
+static volatile bool g_bTopSawUcast      = false;
 static int           g_nMidBodies        = 0;
 
 static volatile bool g_bLeafUniOk    = false;
@@ -325,6 +365,7 @@ protected:
             const bool   bUni   = Contains ( pv, cb, g_sUniBody   );
             const bool   bBcast = Contains ( pv, cb, g_sBcastBody );
             const bool   bShort = Contains ( pv, cb, g_sShortBody );
+            const bool   bUcast = Contains ( pv, cb, g_sUcastBody  );
             CString      strDst = pMsg->GetDestin() ? pMsg->GetDestin() : L"";
 
             //  ONLY the carrier's sightings are the measurement. The top is the
@@ -340,7 +381,24 @@ protected:
                 //  Which routing mode is this? A relayed unicast is still
                 //  addressed at the leaf; a broadcast copy was re-addressed to
                 //  this hub by the fan-out.
-                if ( strDst == kLeafAddr )
+                //
+                //  AND SO IS AN UPCAST COPY, which is why the NAME is asked
+                //  first. On_P2PeerUCast re-addresses exactly the way
+                //  On_P2PeerBCast does, so a phase 6 copy arrives here with
+                //  Dst == kMidAddr and would otherwise be counted as a
+                //  broadcast - scoring phase 6 against phase 5's flags and
+                //  making both meaningless. The name is the only thing that
+                //  separates two fan-outs that look identical on the wire, and
+                //  it is worth saying that this is a TEST reading it: the
+                //  library never does, because a name is what F-S9-1 got
+                //  wrong. Here there is nothing to protect, only two phases to
+                //  tell apart.
+                if ( pMsg->Map_MatchName ( P2Pmsg_UCast ) )
+                {
+                    g_bMidCarriedUcast = true;
+                    if ( bUcast ) g_bMidSawUcastPlain = true;
+                }
+                else if ( strDst == kLeafAddr )
                 {
                     g_bMidCarriedUni = true;
                     g_bMidUniMarked  = bMark;
@@ -355,7 +413,8 @@ protected:
             }
 
             std::printf ( "[sealbcast] %s holds %s -> %s [%s], %u bytes,"
-                          " sealed-marker=%s; unicast=%s broadcast=%s short=%s\n",
+                          " sealed-marker=%s; unicast=%s broadcast=%s short=%s"
+                          " upcast=%s\n",
                           RoleName(),
                           N ( pMsg->GetSource() ).c_str(),
                           N ( pMsg->GetDestin() ).c_str(),
@@ -364,12 +423,42 @@ protected:
                           bMark  ? "set" : "CLEAR",
                           bUni   ? "VISIBLE" : "no",
                           bBcast ? "VISIBLE" : "no",
-                          bShort ? "VISIBLE" : "no" );
+                          bShort ? "VISIBLE" : "no",
+                          bUcast ? "VISIBLE" : "no" );
             std::fflush ( stdout );
         }
         return P2PeerHub::PeekP2PeerMsg ( pMsg );
     }
 
+    //  The OTHER fan-out, phase 6. Every role chains, including the leaf:
+    //  here the leaf is the ORIGIN of the upcast rather than its recipient, so
+    //  swallowing it would stop the relay at the hub that posted it. The top
+    //  is the far end and records the arrival; it relays nothing onward
+    //  because it has no parent, which is what reaching the root looks like.
+    virtual msgRESULT On_P2PeerUCast ( P2PeerMsg *pMsg ) override
+    {
+        if ( m_eRole == RoleTop && pMsg && pMsg->Data ( ) &&
+             Contains ( pMsg->Data ( ), (size_t)pMsg->DataSize ( ), g_sUcastBody ) )
+        {
+            Log ( "TOP received the upcast body" );
+            g_bTopSawUcast = true;
+        }
+        return P2PeerHub::On_P2PeerUCast ( pMsg );
+    }
+
+public:
+    //  Posts an upcast, addressed at this hub ITSELF - the same shape phase 3
+    //  uses for the broadcast and for the same reason: a message addressed
+    //  elsewhere is routed by address and the relay never sees it.
+    void PostUpcast ( )
+    {
+        const P2PaddrSTR strSelf = GetP2PaddrHub ( ).c_wstr ( );
+        PostP2PeerMsg ( new P2PeerMsg32 ( strSelf, strSelf, P2Pmsg_UCast,
+                                          g_sUcastBody.data ( ),
+                                          (P2Psize_t)g_sUcastBody.size ( ) ) );
+    }
+
+protected:
     // THE FAN-OUT UNDER TEST RUNS IN THE BASE CLASS, so the top and the carrier
     // must CHAIN rather than swallow. Every other multi-hub test here returns
     // msgHANDLED for the roles it does not care about, which is precisely why
@@ -503,6 +592,7 @@ int main ( int argc, char *argv[] )
     g_sUniBody   = MakeBody ( kUniTag,   kLongBody  );
     g_sBcastBody = MakeBody ( kBcastTag, kLongBody  );
     g_sShortBody = MakeBody ( kShortTag, kShortBody );
+    g_sUcastBody = MakeBody ( kUcastTag, kLongBody  );
 
     std::printf ( "=== p2p_sealbcast - the automatic seal, over a real link ===\n" );
     std::printf ( "Ports : %d (top listens), %d (carrier listens)\n",
@@ -867,6 +957,66 @@ int main ( int argc, char *argv[] )
             const bool bP5UniSealed = g_bMidCarriedUni   && !g_bMidSawUniPlain;
             const bool bP5UniOk     = g_bLeafUniOk       && !g_bLeafUniWrong;
 
+            // ---- Phase 6: the OTHER fan-out, and the switch that is not
+            //      allowed to cover it ------------------------------------
+            //  On_P2PeerUCast is the mirror of On_P2PeerBCast: a copy per
+            //  PARENT link, re-addressed to that link's own peer, and each
+            //  parent delivers it locally before relaying it on. So an upcast
+            //  climbs to the root and every ancestor receives it: what the
+            //  origin addressed is a CHAIN, no more sealable than a subtree,
+            //  and refused by default for exactly the reason phase 3's
+            //  broadcast is.
+            //
+            //  IT WAS DEAD CODE UNTIL 2026-09-22. There was no P2Pmsg_UCast
+            //  ID and no map entry, so the handler could not be reached -
+            //  which is also why the header of P2PeerCon::SealAppMsgOutbound
+            //  could claim that TMsg_Scp was stamped by both relays and be
+            //  vacuously right. Wiring the relay up under the obvious symmetry
+            //  - the same scope field - would have made that sentence true and
+            //  the TEST beneath it wrong in the same commit:
+            //  RequireSealBroadcast(false), a setting deployments have already
+            //  recorded, would have started exempting a second class of
+            //  traffic on a relay that did not exist when they recorded it.
+            //
+            //  So the upcast stamps TMsg_Ups, RequireSealUpcast is its own
+            //  switch, and THIS IS THE PHASE THAT HOLDS THE TWO APART. It runs
+            //  with phase 5's policy still in force - sealing ON, broadcasts
+            //  exempted - and changes nothing else:
+            //      6a  SealBcast(false) alone: the upcast must be REFUSED at
+            //          the sender, so the keyless carrier never holds it;
+            //      6b  SealUcast(false) as well: now it is exempt, and the
+            //          carrier reads it in clear.
+            //  6a is the guard. 6b is the control that stops 6a passing
+            //  because an upcast cannot be sent at all - the same pairing
+            //  p2p_ucastgate uses for the routing bound, and the failure it
+            //  exists to prevent is the one the register hit twice.
+            Log ( "--- phase 6a: sealing ON, broadcasts exempt, an UPCAST ---" );
+            const LONG nClosesBeforeUcast = g_nCloses;
+            if ( oLeaf.IsSealBroadcastRequired ( ) ||
+                !oLeaf.IsSealUpcastRequired    ( )    )
+                Log ( "phase 6a: WARNING - the switches are not what this "
+                      "phase assumes, so it proves nothing" );
+            oLeaf.PostUpcast ( );
+            Sleep ( 3000 );
+            const bool bP6aCarried = g_bMidCarriedUcast;
+            const bool bP6aTop     = g_bTopSawUcast;
+
+            Log ( "--- phase 6b: and now with RequireSealUpcast(false) ---" );
+            g_bMidCarriedUcast  = false;
+            g_bMidSawUcastPlain = false;
+            g_bTopSawUcast      = false;
+            oTop .RequireSealUpcast ( false );
+            oMid .RequireSealUpcast ( false );
+            oLeaf.RequireSealUpcast ( false );
+            if ( oLeaf.IsSealUpcastRequired ( ) )
+                Log ( "phase 6b: WARNING - the switch did not take, so this "
+                      "phase proves nothing" );
+            oLeaf.PostUpcast ( );
+            Sleep ( 3000 );
+            const bool bP6bCarried = g_bMidCarriedUcast;
+            const bool bP6bPlain   = g_bMidSawUcastPlain;
+            const LONG nP6Closes   = g_nCloses - nClosesBeforeUcast;
+
             // ---- The verdict ----------------------------------------------
             const bool bP1 = !bP1MidPlain && !bP1LeafWrong;
             const bool bP2 = g_bLeafSawShort    && !g_bMidSawShortPlain;
@@ -881,6 +1031,14 @@ int main ( int argc, char *argv[] )
             const bool bP4 = bP4Arrived && nP4Closes == 0;
             const bool bP5 = bP5BcastOpen && bP5UniSealed && bP5UniOk
                           && nP5Closes == 0;
+            //  PHASE 6 PASSES WHEN THE BROADCAST EXEMPTION DID NOT REACH
+            //  THE UPCAST, and when turning the upcast's own switch off did.
+            //  Either half alone is worthless: 6a on its own is satisfied by
+            //  an upcast that cannot be sent for any reason at all, and 6b on
+            //  its own says only that a switch has an effect.
+            const bool bP6 = !bP6aCarried && !bP6aTop
+                          && bP6bCarried && bP6bPlain
+                          && nP6Closes == 0;
 
             std::printf ( "\n--- what the carrier could read ---\n" );
             std::printf ( "  phase 1  relayed unicast, long  (%3u bytes) : %s%s\n",
@@ -912,12 +1070,22 @@ int main ( int argc, char *argv[] )
                             : ( g_bMidSawUniPlain ? "PLAINTEXT - EXEMPTION LEAKED"
                                                   : "opaque" ),
                           ( bP5UniSealed && bP5UniOk ) ? "" : "   <-- FAILED" );
-            std::printf ( "  links closed, phases 2 / 3 / 4 / 5         : %ld / %ld / %ld / %ld\n",
+            std::printf ( "  phase 6a upcast, SealBcast(false) only     : %s%s\n",
+                          !bP6aCarried ? "REFUSED - the exemption stayed put"
+                                       : "CARRIED - THE EXEMPTION LEAKED",
+                          bP6 ? "" : "   <-- FAILED" );
+            std::printf ( "  phase 6b upcast, SealUcast(false) too      : %s%s\n",
+                          !bP6bCarried ? "never arrived - 6a proves nothing"
+                            : ( bP6bPlain ? "readable, as configured"
+                                          : "sealed anyway" ),
+                          bP6 ? "" : "   <-- FAILED" );
+            std::printf ( "  links closed, phases 2 / 3 / 4 / 5 / 6     : %ld / %ld / %ld / %ld / %ld\n",
                           (long)( nClosesAfterShort - nClosesBeforeShort ),
-                          (long)nP3Closes, (long)nP4Closes, (long)nP5Closes );
+                          (long)nP3Closes, (long)nP4Closes, (long)nP5Closes,
+                          (long)nP6Closes );
             std::fflush ( stdout );
 
-            if ( bP1 && bP2 && bP3 && bP4 && bP5 )
+            if ( bP1 && bP2 && bP3 && bP4 && bP5 && bP6 )
             {
                 std::printf (
                   "\nRESULT: PASS - the carrier held %d bodies. It could read no\n"
@@ -937,10 +1105,19 @@ int main ( int argc, char *argv[] )
                   "  origin's attestation over its scope: unencrypted, still\n"
                   "  unforgeable.\n"
                   "\n"
+                  "  AN UPCAST IS A SECOND AUDIENCE AND A SECOND DECISION. It fans\n"
+                  "  out to every ancestor, so it is no more sealable than a\n"
+                  "  broadcast and is refused on the same default - but\n"
+                  "  RequireSealBroadcast(false) did NOT reach it, and\n"
+                  "  RequireSealUpcast(false) did. The relay is symmetrical; the\n"
+                  "  consent is not, because a deployment that wrote down one of\n"
+                  "  those sentences has not written down the other.\n"
+                  "\n"
                   "  CONFIDENTIAL BROADCAST IS STILL NOT AVAILABLE. That is an open\n"
                   "  design question - ProductionPlanLatest2.md item 6 - and this test\n"
                   "  goes green on the decision having been MADE, not on the\n"
-                  "  capability existing.\n", g_nMidBodies );
+                  "  capability existing. The same is true of a confidential upcast,\n"
+                  "  and for the same reason.\n", g_nMidBodies );
                 nExit = 0;
             }
             else
