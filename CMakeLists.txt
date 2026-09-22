@@ -1014,17 +1014,20 @@ target_link_libraries(p2p_dmxcap_slot PRIVATE targetcore msgcore p2pplatform)
 # by being a send. --alive asserts the same message on the same call ARRIVES,
 # positively, and that nothing closes.
 #
-# ONLY THE SEND HALF IS FIXED AND GATED. The recv half of the identical
-# defect (P2PeerioDmx.cpp:177-181) is measured and deliberately untouched: with
-# it fixed, p2pweb_w6 SEGFAULTs at teardown - p2pweb wires its hub chain with
-# P2PeerConDmx, and a recv is re-armed constantly during shutdown, so turning a
-# silent re-arm into a connection drop reorders how every in-process chain
-# comes down. Measured 2026-09-21, one failure in the first run of the pair
-# fixed together, and five clean runs with the send half alone. That half goes
-# with item 7's teardown work.
+# BOTH HALVES ARE FIXED NOW, and the main run's verdict comes a different way.
+# The recv half was held back on 2026-09-21 because fixing it SEGFAULTed
+# p2pweb_w6 at teardown; what it was reaching was P2PeerConDmx::Drop()
+# re-posting a recv already in the port, which item 7's seventh design removed
+# (Targetcore, 2026-09-22). That design also means a client whose peer leaves is
+# told UNPROMPTED - its parked read is aborted onto its own port - so the
+# attached-but-dead state this gate was written to poke no longer lasts long
+# enough to poke. The main run now waits for that close first and only falls
+# back to the send when it does not come. The Linux TSan gate is what forced
+# the reordering: posting on a connection the pump is retiring is two data
+# races, and Windows timing had been hiding both.
 #
 # NO RESOURCE_LOCK: the link is a pointer handoff inside the test process.
-#   STATUS: PASSES        (measured 2026-09-21, Windows Debug)
+#   STATUS: PASSES        (measured 2026-09-22, Windows Debug)
 add_executable(p2p_dmxdead p2p_dmxdead.cpp)
 _mscs_test_common(p2p_dmxdead)
 target_link_libraries(p2p_dmxdead PRIVATE targetcore msgcore p2pplatform)

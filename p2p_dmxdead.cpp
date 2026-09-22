@@ -25,12 +25,28 @@
 // Measured 2026-09-21 by printing hr at the completion and reading
 // 0x00000000 where ERROR_OPERATION_ABORTED had been written one line above.
 //
-// WHAT THIS GATE ASSERTS. The server hub is closed, joined AND destroyed, so
-// the client's connection is detached - GetUDState() == 0, checked as a
-// PRECONDITION rather than assumed, because a send that does not reach the
-// refusal measures nothing at all. The client then posts a message straight
-// onto that connection and must learn that it failed: On_ConClose on the
-// client hub. Today it never comes.
+// WHAT THIS GATE ASSERTS. The server hub is closed, joined AND destroyed.
+// The client must then learn that its peer is gone - On_ConClose on the
+// client hub - and there are two routes by which it can:
+//
+//   - UNPROMPTED. Since 2026-09-22 (item 7's seventh design) the departing
+//     side hands the client's parked read back to the client's own port,
+//     aborted, and the client closes on its own pump without anyone sending
+//     anything. This is the route taken today, and phase 2 waits for it.
+//   - ON SEND. If the close has NOT arrived within the wait, the connection
+//     is still alive and attached-but-dead, and phase 3 measures what this
+//     gate was written for: GetUDState() == 0 checked as a PRECONDITION,
+//     then a message posted straight onto the connection, which must fail
+//     and close it rather than be deleted as delivered.
+//
+// The ordering is the point. Phase 3 touches pCli, and once On_ConClose has
+// run the pump conDROPs and deletes that object; a harness that posts on it
+// after that is posting on freed memory. Windows timing hid that; the Linux
+// TSan gate reported it as two data races on the first run it saw the fix -
+// the test's read of GetUDState() against the pump's Drop() clearing it, and
+// the test's send kick against the pump's Drop() reading bQueued. So phase 3
+// runs ONLY when Closed() is still false, which is the one state in which
+// nothing on the pump is retiring pCli.
 //
 // WHY THE MESSAGE IS POSTED ON THE CONNECTION, not on the hub. P2PeerCon::
 // PostP2PeerMsg (P2PeerCon.cpp:1833) queues on that one connection and kicks
@@ -45,15 +61,15 @@
 // same message on the same call must ARRIVE - asserted positively, by the
 // server's On_P2PeerBCast - and no close may occur.
 //
-// WHAT THIS GATE DOES NOT ESTABLISH. The RECV half of the same defect, at
-// P2PeerioDmx.cpp:177-181, is NOT fixed and NOT gated here. It was measured
-// on 2026-09-21 and it destabilises teardown: with it fixed, p2pweb_w6 - a
-// test with no DMX in its name, whose hub chain is wired with P2PeerConDmx -
-// SEGFAULTs after its last assertion. A recv is re-armed constantly during
-// shutdown, so turning a silent re-arm into a connection drop changes the
-// order every in-process chain comes down in. That half belongs with item 7's
-// teardown work. This half does not, and is gated here because it is
-// reachable, observable and measured stable over repeated runs.
+// WHAT THIS GATE DOES NOT ESTABLISH ANY MORE. The send-failure path in
+// SendP2PeerMsg is reachable only in the window between the peer leaving and
+// the client's own pump processing the abort, and that window is not one a
+// harness can land in deterministically. The status fix is in - both halves,
+// the recv half having been held back on 2026-09-21 because it "broke
+// teardown", which turned out to be P2PeerConDmx::Drop() re-posting a recv
+// already in the port - but its gate is now the control plus phase 2. What
+// phase 3 keeps is a second route to the same verdict should the unprompted
+// close ever regress, and a record of what this test was for.
 //
 // Verdict = process EXIT CODE: 0 PASS | 1 FAIL | 2 SETUP | 3 INCONCLUSIVE.
 
@@ -247,16 +263,38 @@ int main ( int argc, char *argv[] )
             hServer = 0;
             Log ( "server destroyed" );
 
-            // ---- Phase 2: the precondition ----------------------------
-            //  If the peer pointer is still set the send below never
-            //  reaches the refusal, and a red verdict would be measuring
-            //  the wrong thing
-            const DWORD_PTR uPeer = pCli -> GetUDState ( );
-            std::printf ( "[dmxdead] client GetUDState()=%p (0 means detached)\n",
-                          (void *)uPeer );
+            // ---- Phase 2: told UNPROMPTED? -----------------------------
+            //  The departing side aborts the client's parked read onto the
+            //  client's own port, so the client closes without a send.
+            //  Once Closed() is true the pump is conDROPping pCli and the
+            //  object must not be touched again from here
+            Log ( "--- phase 2: the client should close on its own ---" );
+            const bool bToldUnprompted =
+                WaitFor ( [&]{ return oClient.Closed ( ); }, 8000 );
+            std::printf ( "[dmxdead] clientClosed(unprompted)=%s\n",
+                          bToldUnprompted ? "yes" : "no" );
             std::fflush ( stdout );
-            if ( uPeer != 0 )
+
+            DWORD_PTR uPeer = 0;
+            if ( bToldUnprompted )
             {
+                std::printf (
+                  "\nRESULT: PASS - the sender was told, unprompted.\n"
+                  "  The peer's hub closed and the client connection closed\n"
+                  "  on its own pump without a message being sent, which is\n"
+                  "  OpenCodeWork.md item 7's fix seen from the client side.\n"
+                  "  Phase 3 (the send to a departed peer) is not reachable\n"
+                  "  when this holds, and is not attempted.\n" );
+                nExit = 0;
+            }
+            else if ( ( uPeer = pCli -> GetUDState ( ) ) != 0 )
+            {
+                //  Not told, and the peer pointer is still set: the send
+                //  below would never reach the refusal, and a red verdict
+                //  would be measuring the wrong thing
+                std::printf ( "[dmxdead] client GetUDState()=%p (0 means detached)\n",
+                              (void *)uPeer );
+                std::fflush ( stdout );
                 std::printf (
                   "\nRESULT: SETUP - the client is still attached to a server\n"
                   "  that is gone, so P2PeerioDmx::SendP2PeerMsg will take its\n"
@@ -267,6 +305,11 @@ int main ( int argc, char *argv[] )
             else
             {
                 // ---- Phase 3: the send must be reported failed --------
+                //  Reached only when the client is still open, i.e. nothing
+                //  on its pump is retiring pCli
+                std::printf ( "[dmxdead] client GetUDState()=%p (0 means detached)\n",
+                              (void *)uPeer );
+                std::fflush ( stdout );
                 Log ( "--- phase 3: send to the departed peer ---" );
                 PostOne ( pCli );
 
