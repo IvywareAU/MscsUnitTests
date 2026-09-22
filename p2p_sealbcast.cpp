@@ -132,7 +132,8 @@
 //
 //   BROADCASTS ARE ENABLED BY HAND, and that is itself worth writing down:
 //   ConState_BCasts is set nowhere in the library outside the P2Pexpump paths
-//   (P2PeerExplorer.cpp:1379, P2PeerHub.cpp:1301), so On_P2PeerBCast's fan-out
+//   (P2PeerExplorer.cpp:1382, the login grant in On_XCidConLogin, and
+//   P2PeerHub.cpp:1436, the "AcceptWSA" command handler), so the fan-out
 //   reaches nothing at all on a stock tree until the application sets it. This
 //   test sets it on each connection as it logs in.
 //
