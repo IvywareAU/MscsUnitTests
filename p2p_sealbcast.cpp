@@ -191,6 +191,7 @@
 #include "P2PAuthLogin.h"
 #include "P2PeerSeal.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -231,30 +232,41 @@ static HANDLE g_hLeafUp    = NULL;   // the leaf logged in to the carrier
 //  What the carrier saw. The "SawPlain" flags are the measurement; the "Carried"
 //  flags say the carrier was looking at the right traffic at all, which is what
 //  stops silence being read as a pass.
-static volatile bool g_bMidCarriedUni    = false;
-static volatile bool g_bMidSawUniPlain   = false;
-static volatile bool g_bMidUniMarked     = false;
-static volatile bool g_bMidCarriedBcast  = false;
-static volatile bool g_bMidSawBcastPlain = false;
-static volatile bool g_bMidBcastMarked   = false;
-static volatile bool g_bMidSawShortPlain = false;
+//
+//  ATOMIC RATHER THAN VOLATILE, AND THAT IS NOT A STYLE CHOICE. Every flag here
+//  is written by a HUB THREAD inside PeekP2PeerMsg and read by MAIN after a
+//  Sleep. volatile stops the compiler caching the load and supplies no
+//  happens-before edge whatsoever, so the pair is a data race by the memory
+//  model however long the Sleep is -- and TSan said so: run 35734775287 on
+//  Targetcore master reported g_bMidCarriedUcast and g_bMidSawUcastPlain at
+//  lines 398/399 against main, with usleep as the only thing between them.
+//  The Sleep still decides WHEN main looks; the atomic decides that what it
+//  reads is defined. Do not put volatile back: it compiled, it passed, and it
+//  was wrong for two days.
+static std::atomic<bool> g_bMidCarriedUni  { false };
+static std::atomic<bool> g_bMidSawUniPlain { false };
+static std::atomic<bool> g_bMidUniMarked   { false };
+static std::atomic<bool> g_bMidCarriedBcast{ false };
+static std::atomic<bool> g_bMidSawBcastPlain{ false };
+static std::atomic<bool> g_bMidBcastMarked { false };
+static std::atomic<bool> g_bMidSawShortPlain{ false };
 //  Phase 6, the OTHER fan-out. Kept apart from the broadcast pair above and
 //  not folded into them, because the whole of phase 6 is that the two are not
 //  the same traffic and are not governed by the same switch.
-static volatile bool g_bMidCarriedUcast  = false;
-static volatile bool g_bMidSawUcastPlain = false;
-static volatile bool g_bTopSawUcast      = false;
-static int           g_nMidBodies        = 0;
+static std::atomic<bool> g_bMidCarriedUcast{ false };
+static std::atomic<bool> g_bMidSawUcastPlain{ false };
+static std::atomic<bool> g_bTopSawUcast    { false };
+static std::atomic<int>  g_nMidBodies     { 0 };
 
-static volatile bool g_bLeafUniOk    = false;
-static volatile bool g_bLeafUniWrong = false;
-static volatile bool g_bLeafSawBcast = false;
-static volatile bool g_bLeafSawShort = false;
+static std::atomic<bool> g_bLeafUniOk      { false };
+static std::atomic<bool> g_bLeafUniWrong   { false };
+static std::atomic<bool> g_bLeafSawBcast   { false };
+static std::atomic<bool> g_bLeafSawShort   { false };
 
 //  A connection that DIES mid-test is the failure hardest to read from silence,
 //  and phase 3 is expected to cause one. Counted rather than flagged, so a phase
 //  can ask "did anything close while I was running".
-static volatile LONG g_nCloses = 0;
+static std::atomic<LONG> g_nCloses { 0 };
 
 static void Log ( const char *msg )
 {
@@ -553,7 +565,7 @@ protected:
     //  of the two it caused.
     virtual conRESULT On_ConClose ( P2PeerCon *pCon ) override
     {
-        InterlockedIncrement ( &g_nCloses );
+        ++g_nCloses;
         std::printf ( "[sealbcast] %s: connection to '%s' CLOSED\n", RoleName(),
                       pCon ? N ( pCon->GetP2Paddress().c_wstr() ).c_str() : "?" );
         std::fflush ( stdout );
@@ -794,7 +806,7 @@ int main ( int argc, char *argv[] )
               bUniArrived ? "never passed the carrier"
                           : "never reached the leaf",
               (unsigned)( kLongBody + p2pseal::kSealOverhead ),
-              (long)g_nCloses );
+              (long)g_nCloses.load ( ) );
             nExit = 3;
         }
         else
@@ -1117,7 +1129,7 @@ int main ( int argc, char *argv[] )
                   "  design question - ProductionPlanLatest2.md item 6 - and this test\n"
                   "  goes green on the decision having been MADE, not on the\n"
                   "  capability existing. The same is true of a confidential upcast,\n"
-                  "  and for the same reason.\n", g_nMidBodies );
+                  "  and for the same reason.\n", g_nMidBodies.load ( ) );
                 nExit = 0;
             }
             else
