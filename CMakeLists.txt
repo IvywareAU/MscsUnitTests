@@ -902,9 +902,8 @@ set_tests_properties(p2p_pipecap_control PROPERTIES
 # after it refused someone - the failure this refusal could plausibly cause,
 # since a refusal that forgets to drop the consumed accept leaves the
 # unconditional re-arm in P2PeerTarget::On_ConAccept throwing. The slot
-# question is asked by p2p_dmxcap_slot below, which is BUILT BUT NOT GATED
-# because the answer is still no: on this transport the slot does not come
-# back, and that is OpenCodeWork.md item 7 - open, diagnosed, not closed.
+# question is asked by p2p_dmxcap_slot below, gated on 2026-09-22 once the
+# answer became yes - OpenCodeWork.md item 7, and the seventh design for it.
 #
 # NO RESOURCE_LOCK, and that is the transport rather than an omission: every
 # link is a pointer handoff inside the test process. There is no port and no
@@ -949,50 +948,46 @@ set_tests_properties(p2p_dmxcap_control PROPERTIES
 # It asks two things in order because they fail differently. First the
 # accounting: GetAcceptedCount() must return to 0 once the client's hub is
 # closed, joined AND destroyed - the count is decremented by ~P2PeerCon and
-# nothing else (P2PeerCon.cpp:146-151, the only release path, deliberately),
+# nothing else (P2PeerCon.cpp:144-155, the only release path, deliberately),
 # so a count that does not move means the accepted connection is still alive.
 # Then the consequence: a later client must actually be served in the freed
 # slot, which can fail even when the accounting is right, if the service
 # stopped listening.
 #
-# BUILT BUT NOT GATED, and NOT because it is unfinished - because it is RED,
-# and the defect it is red on is not one that can be closed from here.
-# teardown_stress below is built the same way for the same kind of reason.
-# There is deliberately no add_test and deliberately no WILL_FAIL: a red entry
-# would break CI and a WILL_FAIL one would make CI green on a live defect,
-# which this file refuses everywhere else. Run it by hand:
-#     build/windows-msvc/MscsUnitTests/Debug/p2p_dmxcap_slot.exe --slotreturn
+# GATED 2026-09-22, having been built-but-red since 2026-09-21. It went green
+# on the SEVENTH design, and the six before it are the reason this entry is
+# NOT the measurement that let it in. Every one of the six turned this test
+# green; every one broke p2pweb somewhere else - two at teardown, four in
+# live service, in four different tests, and the sixth only on the third of
+# eight consecutive `ctest -L p2pweb` passes after passing the gate, w4 alone
+# and w6 twelve times running. So this entry proves the slot came back and
+# nothing about what it cost, and a change that touches connection lifetime
+# is measured by the p2pweb label repeated, with w4 read first: it is itself a
+# slot-return test that fails live and on an assertion, and it caught four of
+# the six on their first run.
 #
-# WHAT IT REPORTS TODAY (measured 2026-09-21, Windows Debug): the client hub
-# is closed, joined and destroyed, and the service's GetAcceptedCount() is
-# still 1 ten seconds later. So SetMaxAccepted() on this transport is a
-# LIFETIME TOTAL, not the concurrency limit P2PeerCon.h:242 documents.
-#
-# A FIX WAS BUILT AND REVERTED, and the reason is worth the paragraph. Three
-# causes were found and fixed, each only visible once the one before it was:
-# the wake in P2PeerConDmx::Drop() required the peer to have a QUEUED recv,
-# which an idle in-process link never has; P2PeerConDmx::OnClose() never
-# destroyed an accepted connection and COULD NOT, because three transports
-# declared a non-virtual Destroy() that hid P2PeerConPlc::Destroy() and that
-# nothing defined; and the wake still did not wake, because PostOVERLAPPED()
-# calls prepareOVERLAPPED(), which assigns hr = S_OK - so all four sites in
-# the tree that set hr = ERROR_OPERATION_ABORTED before posting were posting a
-# SUCCESS. With all three fixed this entry passes.
-#
-# It was reverted because it destabilised the suite: p2pweb wires its hub
-# chain with P2PeerConDmx (WebChainBuilder.cpp:477), and p2pweb_w6 began
-# SEGFAULTing at teardown after its last assertion, in roughly half of all
-# runs on 2026-09-21 - confirmed against a reverted library, not assumed. Cause:
-# is that the bQueued guard was doing TWO jobs: P2PeerCon.cpp:1287-1300 states
-# that a queued member OVERLAPPED also means one reference is held and the
-# connection cannot reach zero. Waking an IDLE peer therefore posts to a
-# connection with no references at all. Holding a reference across the post
-# did not settle it either. Closing this properly is reference-safe peer
-# notification in a refcounted teardown - a design change to DMX, not a patch.
-# OpenCodeWork.md item 7 carries the full measurement.
+# WHAT WAS WRONG, in one line: a DMX read that is PARKED - the peer has nothing
+# to say, so P2PeerioDmx holds the buffer until it does - was a pending
+# operation accounted as neither a queued completion nor a held reference.
+# The recv branch releases the completion before RecvP2PeerMsg parks it, so
+# an idle in-process connection was owed nothing by anyone and could not be
+# told its partner had gone. The fix gives the park a reference
+# (OVERLAPPEDcon::bParked) and one way out (P2PeerioDmx::UnparkRecv), and
+# P2PeerConDmx::Drop() now hands the departed peer's parked read back to the
+# PEER'S port as aborted, so the peer closes on its own pump in its own hub.
+# The same function used to re-post a recv that was already in the port,
+# which was the w6 SEGFAULT the earlier designs kept reaching; that is gone
+# too. Both halves of the departed-peer status fix in P2PeerioDmx are in as
+# well - the recv half was held back on 2026-09-21 because it "broke
+# teardown", and what it broke was that double post.
+#   STATUS: PASSES        (measured 2026-09-22, Windows Debug: this entry,
+#                          then ctest -L p2pweb 8 of 8 consecutive passes)
 add_executable(p2p_dmxcap_slot p2p_dmxcap.cpp)
 _mscs_test_common(p2p_dmxcap_slot)
 target_link_libraries(p2p_dmxcap_slot PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_dmxcap_slot COMMAND p2p_dmxcap_slot --slotreturn)
+set_tests_properties(p2p_dmxcap_slot PROPERTIES
+    TIMEOUT 120 LABELS security)
 
 # p2p_dmxdead: does a DMX send to a peer that has GONE report that it failed,
 # or that it worked? OpenCodeWork.md item 7's SECOND exit criterion, and a
