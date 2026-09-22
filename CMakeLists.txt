@@ -618,8 +618,14 @@ set_tests_properties(p2p_sealhop PROPERTIES
 # Exit 3 (inconclusive) is NOT a pass and ctest reads it as a failure.
 #   STATUS: PASSES, all 6 phases.
 #           (Phases 1-5 on Windows Debug, Windows Release and Linux gcc/OpenSSL,
-#            all 2026-08-25 and all byte-identical. Phase 6 on Windows Debug
-#            2026-09-22; the other two platforms answer in CI.)
+#            all 2026-08-25 and all byte-identical. Phase 6 on Windows MSVC
+#            Debug and on Linux gcc/OpenSSL, both 2026-09-22 - the Linux half
+#            in CI, on a solution-build dispatched with unittests_ref pinned to
+#            the branch carrying this file, which is the only way the new test
+#            meets the new library. WINDOWS RELEASE HAS NOT RUN PHASE 6, and
+#            that is worth naming rather than rounding to "all platforms":
+#            phase 6 turns on a refusal raised by a crypto backend, which is
+#            the class of claim that has been wrong here before.)
 add_executable(p2p_sealbcast p2p_sealbcast.cpp)
 _mscs_test_common(p2p_sealbcast)
 target_link_libraries(p2p_sealbcast PRIVATE targetcore msgcore p2pplatform)
@@ -686,6 +692,19 @@ set_tests_properties(p2p_sealbcast PROPERTIES
 #
 # No WILL_FAIL, labelled `security`, and exit 3 (inconclusive) is NOT a pass.
 #   STATUS: PASSES, all 3 phases.
+#           (Windows MSVC Debug and Linux gcc/OpenSSL, both 2026-09-22, the
+#            Linux half in CI on a solution-build dispatched with unittests_ref
+#            pinned to this branch. Windows Release has not run it.)
+#
+# THE FIRST RUN OF THIS FILE FAILED, and for a reason worth keeping. The login
+# events it waits on are signalled on the SERVER side of each handshake, and a
+# client's own connection does not carry ConState_Login until its ACK has come
+# back. Posting the moment the server said "logged in" raced the client's own
+# state, the relay skipped a connection that was one bit short, and phase 1
+# reported that the upcast never left the leaf - a false red that looks exactly
+# like the true one. WaitForUCastReady polls for the whole of ConUCasts_OK and
+# prints the precondition either way, because a skipped connection and a gated
+# one must not look alike.
 add_executable(p2p_ucastgate p2p_ucastgate.cpp)
 _mscs_test_common(p2p_ucastgate)
 target_link_libraries(p2p_ucastgate PRIVATE targetcore msgcore p2pplatform)
