@@ -1406,6 +1406,17 @@ struct Stamped : MsgView
     MSG_FIELD ( when,  MsgTime );
 };
 
+struct Money : MsgView
+{
+    MSG_FIELD ( currency, std::wstring );
+    MSG_FIELD ( scale,    int );
+};
+
+struct Priced : MsgView
+{
+    MSG_FIELD ( total, double );
+};
+
 struct Limits : MsgView
 {
     MSG_FIELD ( low,  int );
@@ -1908,6 +1919,93 @@ static void Test_FieldRef_ShortTime()
     }
 }
 
+// Attributes (2026-10-03): the second set of named children beside the
+// descendants, P3PmsgField::r_Attr(). Before this the field layer could not
+// reach them -- P3PmsgAttr is not a P3PmsgItem -- so DataFieldTest kept them
+// long-hand. Measured first: Exists() on an item with no attribute set is
+// false and creates nothing; Create is idempotent; the set follows a cursor
+// item; and its operator bool does NOT, so the layer never asks it.
+static void Test_FieldRef_Attrs()
+{
+    TF_CASE("MsgFieldRef::Attr: an attribute is r_Attr()'s, not a descendant, and reads create nothing")
+    {
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"total") = 12.5;
+        TF_CHECK(!Field(oRoot, L"total").Attr(L"currency").Exists());
+        TF_CHECK(!oRoot.SelectItem(L"total").r_Attr().Exists(L"currency"));   // the read made no set
+        Field(oRoot, L"total").Attr(L"currency") = L"AUD";
+        TF_CHECK(Field(oRoot, L"total").Attr(L"currency").AsText() == L"AUD");
+        TF_CHECK(wcscmp(oRoot.SelectItem(L"total").r_Attr().SelectItem(L"currency").c_wstr(), L"AUD") == 0);
+        TF_CHECK(!Field(oRoot, L"total")[L"currency"].Exists());               // not a descendant
+        TF_CHECK(Field(oRoot, L"total").AsReal() == 12.5);                    // the field's own value untouched
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"total").Attr(L"absent").AsText(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"total").Attr(L"currency").AsInt(); }));
+    }
+
+    TF_CASE("MsgFieldRef::Attr: a write creates the field and its attribute set; Erase removes one")
+    {
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"order").Attr(L"id") = 42;           // no "order" yet
+        TF_CHECK(oRoot.Exists(L"order"));
+        TF_CHECK_EQ(Field(oRoot, L"order").Attr(L"id").AsInt(), 42);
+        Field(oRoot, L"order").Attr(L"id") = L"A-42";      // a rewrite retypes, as for any field
+        TF_CHECK_EQ((int)Field(oRoot, L"order").Attr(L"id").DataType(), VBLockData_WSTR16);
+        Field(oRoot, L"order").Attr(L"meta")[L"by"] = L"clerk";   // under an attribute: descendants
+        TF_CHECK(oRoot.SelectItem(L"order").r_Attr().SelectItem(L"meta").SelectItem(L"by").r_data().DataType() == VBLockData_WSTR16);
+        TF_CHECK(Field(oRoot, L"order").Attr(L"meta").Erase());
+        TF_CHECK(!Field(oRoot, L"order").Attr(L"meta").Exists());
+        TF_CHECK(Field(oRoot, L"order").Attr(L"id").Exists());   // its sibling stays
+        TF_CHECK(!Field(oRoot, L"order").Attr(L"meta").Erase()); // false when it was not there
+    }
+
+    TF_CASE("MsgFieldRef::Attr: siblings' attributes stay apart through the shared cursor")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldRef ax = Field(oRoot, L"a").Attr(L"x");
+        MsgFieldRef bx = Field(oRoot, L"b").Attr(L"x");
+        ax = 1; bx = 2; ax = 3;
+        TF_CHECK_EQ(ax.AsInt(), 3);
+        TF_CHECK_EQ(bx.AsInt(), 2);
+        TF_CHECK_EQ(oRoot.SelectItem(L"b").r_Attr().SelectItem(L"x").c_int(), 2);
+    }
+
+    TF_CASE("MsgFieldAnchor::Attrs: a typed view of an item's attributes; msg->f.Attr and msg.Attr")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Priced> msg(oRoot);
+        msg->total = 99.0;
+        msg->total.Attr(L"currency") = L"EUR";                 // an attribute of one member
+        MsgViewOf<Money> money(MsgFieldAnchor::Attrs(MsgFieldAnchor::Child(oRoot, L"total")));
+        TF_CHECK(money->currency.Get() == L"EUR");
+        money->scale = 2;
+        TF_CHECK_EQ(Field(oRoot, L"total").Attr(L"scale").AsInt(), 2);
+        msg.Attr(L"schema") = L"v1";                           // an attribute of the view's own item
+        TF_CHECK(wcscmp(oRoot.r_Attr().SelectItem(L"schema").c_wstr(), L"v1") == 0);
+        MsgViewOf<Money> rootMoney(MsgFieldAnchor::Attrs(oRoot));
+        TF_CHECK(!rootMoney->currency.Exists());               // the root has no currency attribute
+        TF_CHECK(msg->total.Get() == 99.0);
+    }
+
+    TF_CASE("Attrs: Child, Anchor(), the Bytes coding and the name check all carry through")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldAnchor meta = MsgFieldAnchor::Child(MsgFieldAnchor::Attrs(oRoot), L"meta");
+        Field(meta, L"k") = 1;                                  // root.r_Attr()["meta"]["k"]
+        TF_CHECK_EQ(Field(oRoot.r_Attr().SelectItem(L"meta"), L"k").AsInt(), 1);
+        TF_CHECK_EQ(Field(Field(oRoot, L"x").Attr(L"meta").Anchor(), L"k").Exists() ? 1 : 0, 0);
+        TF_CHECK_EQ(Field(MsgFieldAnchor::Attrs(oRoot), L"meta")[L"k"].AsInt(), 1);
+
+        MsgFieldAnchor wire = MsgFieldAnchor::Attrs(oRoot, MsgFieldCoding::Bytes);
+        Field(wire, L"n") = 7;
+        TF_CHECK_EQ((int)Field(MsgFieldAnchor::Attrs(oRoot), L"n").DataType(), VBLockData_BLOB16);
+        TF_CHECK_EQ(Field(MsgFieldAnchor::Attrs(oRoot), L"n").AsInt(), 7);
+
+        std::wstring n64(64, L'n');
+        TF_CHECK(ThrowsP2Pevent([&]{ Field(oRoot, L"f").Attr(n64.c_str()) = 1; }));
+        TF_CHECK(!oRoot.Exists(L"f"));                          // refused before anything was made
+    }
+}
+
 static void Test_FieldView()
 {
     TF_CASE("MSG_FIELD view: msg->field = value, and reads by conversion")
@@ -2006,6 +2104,7 @@ void RunMsgcoreSuite()
     Test_FieldRef_Bytes();
     Test_FieldRef_Paths();
     Test_FieldRef_ShortTime();
+    Test_FieldRef_Attrs();
     Test_FieldView();
     Test_Data_TypedValues();
     Test_Data_CopySemantics();
