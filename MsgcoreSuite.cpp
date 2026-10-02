@@ -1400,6 +1400,12 @@ struct Telemetry : MsgView
     MSG_FIELD ( backup,  std::wstring );
 };
 
+struct Stamped : MsgView
+{
+    MSG_FIELD ( count, short );
+    MSG_FIELD ( when,  MsgTime );
+};
+
 struct Limits : MsgView
 {
     MSG_FIELD ( low,  int );
@@ -1817,6 +1823,91 @@ static void Test_FieldRef_Paths()
     }
 }
 
+// short and MsgTime (2026-10-03). Before these, `= (short)7` was promoted to
+// INT32 and a TIME64 cell could only be written with DeclareItem(P3PmsgTime)
+// and not read at all -- AsInt64 refuses it, by the own-type rule.
+static void Test_FieldRef_ShortTime()
+{
+    TF_CASE("MsgFieldRef short: an exact short stores INT16; promoting types still store INT32")
+    {
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"s") = (short)-7;
+        TF_CHECK_EQ((int)Field(oRoot, L"s").DataType(), VBLockData_INT16);
+        TF_CHECK_EQ((int)Field(oRoot, L"s").AsShort(), -7);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"s").r_data().c_short(), -7);   // the plain reader agrees
+        // A plain P3PmsgData(INT16) cell reads the same way.
+        oRoot.DeclareItem(L"plain", P3PmsgData((INT16)300), TRUE);
+        TF_CHECK_EQ((int)Field(oRoot, L"plain").AsShort(), 300);
+
+        Field(oRoot, L"c")  = 'A';                     // char promotes to int
+        Field(oRoot, L"us") = (unsigned short)9;       // so does unsigned short
+        TF_CHECK_EQ((int)Field(oRoot, L"c").DataType(), VBLockData_INT32);
+        TF_CHECK_EQ((int)Field(oRoot, L"us").DataType(), VBLockData_INT32);
+
+        // Own type only: AsInt does not widen a short, AsShort does not narrow an int.
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"s").AsInt(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"c").AsShort(); }));
+    }
+
+    TF_CASE("MsgFieldRef MsgTime: stores TIME64, and the plain API and P3PmsgTime agree")
+    {
+        P3PmsgField oRoot(L"Root");
+        const long long t = 1700000000LL;
+        Field(oRoot, L"t") = MsgTime(t);
+        TF_CHECK_EQ((int)Field(oRoot, L"t").DataType(), VBLockData_TIME64);
+        TF_CHECK(Field(oRoot, L"t").AsTime() == MsgTime(t));
+        TF_CHECK(oRoot.SelectItem(L"t").r_data().c_time64() == t);        // the plain reader agrees
+
+        // What a long-hand P3PmsgTime wrote, the field layer reads.
+        oRoot.DeclareItem(L"plain", P3PmsgTime((__int64)(t + 60)), TRUE);
+        TF_CHECK(Field(oRoot, L"plain").AsTime().Seconds() == t + 60);
+
+        // (AsTime also reads TIME32, which c_time() reads, but nothing public
+        // CONSTRUCTS a TIME32 cell -- it arrives only in older images -- so
+        // there is no way to make one here. A default P3PmsgData has no cell
+        // to set: c_time(v) on one faults.)
+
+        // A long long stays an integer; each reader wants its own type.
+        Field(oRoot, L"n") = t;
+        TF_CHECK_EQ((int)Field(oRoot, L"n").DataType(), VBLockData_INT64);
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"n").AsTime(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"t").AsInt64(); }));
+    }
+
+    TF_CASE("MsgFieldRef short and MsgTime in the Bytes coding: 2 and 8 native bytes")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldAnchor bytes = MsgFieldAnchor::Of(oRoot, MsgFieldCoding::Bytes);
+        Field(bytes, L"s") = (short)513;
+        Field(bytes, L"t") = MsgTime(42);
+        TF_CHECK_EQ((int)Field(bytes, L"s").DataType(), VBLockData_BLOB16);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"s").r_data().c_size(), 2);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"t").r_data().c_size(), 8);
+        TF_CHECK_EQ((int)Field(oRoot, L"s").AsShort(), 513);              // a Typed reader
+        TF_CHECK(Field(oRoot, L"t").AsTime() == MsgTime(42));
+        // On the wire a time IS 8 bytes: the int64 reader takes it, by design.
+        TF_CHECK(Field(oRoot, L"t").AsInt64() == 42);
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"s").AsInt(); }));  // 2 bytes is not 4
+    }
+
+    TF_CASE("MSG_FIELD short and MsgTime: msg->count, msg->when, in both codings")
+    {
+        for (int coding = 0; coding < 2; ++coding)
+        {
+            P3PmsgField oRoot(L"Root");
+            MsgViewOf<Stamped> msg(oRoot, coding ? MsgFieldCoding::Bytes : MsgFieldCoding::Typed);
+            msg->count = (short)12;
+            msg->when  = MsgTime(1700000000LL);
+            short     n = msg->count;
+            MsgTime   w = msg->when;
+            TF_CHECK_EQ((int)n, 12);
+            TF_CHECK(w.Seconds() == 1700000000LL);
+            msg->count = 'x';                           // a char is short-sized, so accepted
+            TF_CHECK_EQ((int)msg->count.Get(), (int)'x');
+        }
+    }
+}
+
 static void Test_FieldView()
 {
     TF_CASE("MSG_FIELD view: msg->field = value, and reads by conversion")
@@ -1914,6 +2005,7 @@ void RunMsgcoreSuite()
     Test_FieldRef_Typed();
     Test_FieldRef_Bytes();
     Test_FieldRef_Paths();
+    Test_FieldRef_ShortTime();
     Test_FieldView();
     Test_Data_TypedValues();
     Test_Data_CopySemantics();

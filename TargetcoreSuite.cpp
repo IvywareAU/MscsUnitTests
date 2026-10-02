@@ -373,6 +373,27 @@ static void Test_AppFields()
         TF_CHECK_EQ((int)names.size(), 6);
         if ( names.size() == 6 ) TF_CHECK(names[0] == L"device" && names[5] == L"note");
     }
+
+    TF_CASE("AppFields <-> facade: a short is 2 bytes and a time 8, both ways")
+    {
+        // The Bytes table both headers carry, gained 2026-10-03: short = 2
+        // native bytes, time = an int64 of seconds since 1970.
+        P2PeerMsg32 oMsg(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        AppField(oMsg, L"channel") = (short)-3;
+        AppField(oMsg, L"stamp")   = MsgTime(1700000000LL);
+        std::vector<unsigned char> v;
+        TF_CHECK(FacadeGetField(oMsg, L"channel", v) && v == BytesOf((INT16)-3));
+        TF_CHECK(FacadeGetField(oMsg, L"stamp", v) && v == BytesOf((INT64)1700000000LL));
+
+        P2PeerMsg32 oIn(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        FacadePostFields(oIn, {
+            { L"channel", BytesOf((INT16)7) },
+            { L"stamp",   BytesOf((INT64)42) },
+        });
+        TF_CHECK_EQ((int)AppField(oIn, L"channel").AsShort(), 7);
+        TF_CHECK(AppField(oIn, L"stamp").AsTime() == MsgTime(42));
+        TF_CHECK(AppThrows([&]{ (void)AppField(oIn, L"channel").AsInt(); }));   // 2 bytes is not an int
+    }
 }
 
 // ---------------------------------------------------------------------------
