@@ -30,6 +30,7 @@
 #include "P2Pwin32.h"
 #include "P2PeerHub.h"
 #include "P2PeerMsg.h"
+#include "P2PeerAppFields.hpp"  // app fields: MsgFieldAccessPlan.md F3
 #include "Msgexception.h"
 #include "Targetcore_c.h"      // the flat C surface (sink + handle-guard cases below)
 #include "P2PCngCrypto.h"      // p2pcng::SelfTest — crypto KATs
@@ -49,6 +50,7 @@
 #include <vector>
 #include <thread>              // the c_name() race case drives it from two threads
 #include <atomic>
+#include <functional>
 
 using namespace std;
 
@@ -102,6 +104,274 @@ static void Test_MessageValuePlumbing()
         P2PeerMsg32 oMsg(L"s", L"d", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
         oMsg.SetPriority(42);
         TF_CHECK_EQ((int)oMsg.Priority(), 42);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Application fields -- P2PeerAppFields.hpp (MsgFieldAccessPlan.md, F3)
+//
+// The facade side of the interop cases is reproduced from TargetFacade's own
+// source rather than linked: this runner links msgcore + targetcore and
+// nothing else, by design. Each reproduction names the function it copies, so
+// a change there is a change to make here. The real facade round trip, over a
+// link, is FacadeExamples/FieldViewTest.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct AppTelemetry : MsgView
+{
+    MSG_FIELD ( device, std::wstring );
+    MSG_FIELD ( uptime, int );
+    MSG_FIELD ( Dst,    std::wstring );    // the envelope's name, on purpose
+};
+
+bool AppThrows ( const std::function<void()>& fn )
+{
+    try { fn(); return false; }
+    catch ( P2Pevent* pEVT ) { if ( pEVT ) pEVT->Cancel(false); return true; }
+}
+
+// FacadeHub::GetField: the field's c_vBlob() and r_data().c_size(), or "no
+// such field" when either throws -- which is what a facade receiver sees.
+bool FacadeGetField ( P2PeerMsg& msg, LPCWSTR name, std::vector<unsigned char>& out )
+{
+    out.clear();
+    try
+    {
+        P3PmsgItem& root = msg.r_item(VBLockBSTR_ROOT);
+        if ( !root.Exists(L"P2PF$Fields") ) return false;
+        P3PmsgItem& fields = root.SelectItem(L"P2PF$Fields");
+        if ( !fields.Exists(name) ) return false;
+        P3PmsgItem& f = fields.SelectItem(name);
+        const void* pv = f.c_vBlob();
+        size_t      cb = f.r_data().c_size();
+        if ( cb ) out.assign((const unsigned char*)pv, (const unsigned char*)pv + cb);
+        return true;
+    }
+    catch ( P2Pevent* pEVT ) { if ( pEVT ) pEVT->Cancel(false); return false; }
+}
+
+// The facade is Windows-only, so its "wchar_t" bytes ARE UTF-16 units. Written
+// with char16_t here so the reproduction means the same bytes on Linux, where
+// wchar_t is 4 bytes. The test strings are ASCII, so one unit is one character.
+std::vector<unsigned char> Utf16Bytes ( const std::wstring& s )   // with the NUL
+{
+    std::vector<unsigned char> out ( ( s.size() + 1 ) * sizeof(char16_t), 0 );
+    for ( size_t i = 0; i < s.size(); ++i )
+    {
+        char16_t u = (char16_t)s[i];
+        std::memcpy ( &out[i * sizeof u], &u, sizeof u );
+    }
+    return out;
+}
+std::wstring FromUtf16 ( const unsigned char* pb, size_t nUnits )
+{
+    std::wstring out;
+    for ( size_t i = 0; i < nUnits; ++i )
+    {
+        char16_t u; std::memcpy ( &u, pb + i * sizeof u, sizeof u );
+        out += (wchar_t)u;
+    }
+    return out;
+}
+
+// p2pf::Message::fieldText: the bytes as UTF-16, minus ONE terminator.
+std::wstring FacadeFieldText ( const std::vector<unsigned char>& v )
+{
+    if ( v.size() < sizeof(char16_t) ) return std::wstring();
+    return FromUtf16 ( &v[0], v.size() / sizeof(char16_t) - 1 );
+}
+
+// FacadeHub::FieldNames: P2PF$Names to its terminator, split on tabs.
+std::vector<std::wstring> FacadeFieldNames ( P2PeerMsg& msg )
+{
+    std::vector<std::wstring> out;
+    P3PmsgItem& root = msg.r_item(VBLockBSTR_ROOT);
+    if ( !root.Exists(L"P2PF$Names") ) return out;
+    P3PmsgItem& n = root.SelectItem(L"P2PF$Names");
+    const unsigned char* pb = (const unsigned char*)n.c_vBlob();
+    size_t uMax = n.r_data().c_size() / sizeof(char16_t), uLen = 0;
+    for ( ; uLen < uMax; ++uLen )
+    {
+        char16_t u; std::memcpy ( &u, pb + uLen * sizeof u, sizeof u );
+        if ( !u ) break;
+    }
+    std::wstring all = FromUtf16 ( pb, uLen ), one;
+    for ( wchar_t c : all )
+        if ( c == L'\t' ) { if ( !one.empty() ) out.push_back(one); one.clear(); }
+        else one += c;
+    if ( !one.empty() ) out.push_back(one);
+    return out;
+}
+
+// FacadeHub::PostMsg: each field a BLOB16 through (const void*), then the index.
+void FacadePostFields ( P2PeerMsg& msg
+                      , const std::vector<std::pair<std::wstring, std::vector<unsigned char>>>& f )
+{
+    static const unsigned char kEmpty = 0;
+    P3PmsgItem& root = msg.r_item(VBLockBSTR_ROOT);
+    if ( !root.Exists(L"P2PF$Fields") ) root.DeclareItem(L"P2PF$Fields", P3PmsgData());
+    std::wstring names;
+    for ( size_t i = 0; i < f.size(); ++i )
+    {
+        P3PmsgItem& item = root.SelectItem(L"P2PF$Fields");
+        item.DeclareItem(f[i].first.c_str()
+                        , P3PmsgData(f[i].second.empty() ? (const void*)&kEmpty
+                                                         : (const void*)&f[i].second[0]
+                                    , (VBLsize)f[i].second.size(), VBLockData_BLOB16)
+                        , TRUE);
+        if ( i ) names += L"\t";
+        names += f[i].first;
+    }
+    std::vector<unsigned char> units = Utf16Bytes ( names );
+    root.DeclareItem(L"P2PF$Names"
+                    , P3PmsgData((const void*)&units[0], (VBLsize)units.size()
+                                , VBLockData_BLOB16)
+                    , TRUE);
+}
+
+template <class T> std::vector<unsigned char> BytesOf ( const T& v )
+{
+    return std::vector<unsigned char>((const unsigned char*)&v, (const unsigned char*)&v + sizeof v);
+}
+std::vector<unsigned char> TextBytes ( const wchar_t* s )   // SetFieldText's shape
+{
+    return Utf16Bytes ( s );
+}
+
+} // namespace
+
+static void Test_AppFields()
+{
+    TF_CASE("AppField: fields go under P2PF$Fields as blobs, indexed in insertion order")
+    {
+        P2PeerMsg32 oMsg(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        TF_CHECK(!HasAppFields(oMsg));
+        AppField(oMsg, L"device") = L"sensor-04";
+        AppField(oMsg, L"uptime") = 86400;
+        AppField(oMsg, L"ratio")  = 0.5;
+        AppField(oMsg, L"device") = L"sensor-05";      // a rewrite keeps its place
+        TF_CHECK(HasAppFields(oMsg));
+
+        std::vector<std::wstring> names = AppFieldNames(oMsg);
+        TF_CHECK_EQ((int)names.size(), 3);
+        if ( names.size() == 3 )
+            TF_CHECK(names[0] == L"device" && names[1] == L"uptime" && names[2] == L"ratio");
+
+        P3PmsgItem& fields = oMsg.r_item(VBLockBSTR_ROOT).SelectItem(L"P2PF$Fields");
+        TF_CHECK_EQ((int)fields.SelectItem(L"uptime").r_data().DataType(), VBLockData_BLOB16);
+        TF_CHECK(AppField(oMsg, L"device").AsText() == L"sensor-05");
+        TF_CHECK_EQ(AppField(oMsg, L"uptime").AsInt(), 86400);
+
+        TF_CHECK(AppField(oMsg, L"uptime").Erase());
+        names = AppFieldNames(oMsg);
+        TF_CHECK_EQ((int)names.size(), 2);
+        if ( names.size() == 2 )
+            TF_CHECK(names[0] == L"device" && names[1] == L"ratio");
+    }
+
+    TF_CASE("AppFields: a view cannot reach the routing envelope")
+    {
+        // By construction, not by a deny-list: every name resolves under
+        // P2PF$Fields, so a field called Dst is just a field called Dst.
+        P2PeerMsg32 oMsg(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        MsgViewOf<AppTelemetry> msg(AppFields(oMsg));
+        msg->Dst    = L"Evil.Dst";
+        msg->device = L"sensor-04";
+        AppField(oMsg, L"Src") = L"Evil.Src";
+        AppField(oMsg, L"Tag") = 99;
+        TF_CHECK(wcscmp(oMsg.GetDestin(), L"App.Dst") == 0);
+        TF_CHECK(wcscmp(oMsg.GetSource(), L"App.Src") == 0);
+        TF_CHECK(msg->Dst.Get() == L"Evil.Dst");       // it IS stored -- as a field
+        TF_CHECK(!oMsg.r_item(VBLockBSTR_ROOT).Exists(L"Dst"));
+    }
+
+    TF_CASE("AppFields: the facade's limits are enforced at the write")
+    {
+        P2PeerMsg32 oMsg(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        TF_CHECK(AppThrows([&]{ AppField(oMsg, L"P2PF$Names") = 1; }));   // reserved prefix
+        TF_CHECK(AppThrows([&]{ AppField(oMsg, L"P2PFanything") = 1; }));
+        TF_CHECK(AppThrows([&]{ AppField(oMsg, L"") = 1; }));
+        std::wstring n64(64, L'n');
+        TF_CHECK(AppThrows([&]{ AppField(oMsg, n64.c_str()) = 1; }));
+        std::vector<unsigned char> big(8193, 0x5A), atCap(8192, 0x5A);
+        TF_CHECK(AppThrows([&]{ AppField(oMsg, L"big") = MsgBlob(&big[0], big.size()); }));
+        AppField(oMsg, L"max") = MsgBlob(&atCap[0], atCap.size());
+        TF_CHECK_EQ((int)AppField(oMsg, L"max").AsBlob().size(), 8192);
+
+        for ( int i = 1; i < 64; ++i )                        // 63 more: 64 in all
+            AppField(oMsg, (L"f" + std::to_wstring(i)).c_str()) = i;
+        TF_CHECK_EQ((int)AppFieldNames(oMsg).size(), 64);
+        TF_CHECK(AppThrows([&]{ AppField(oMsg, L"one-too-many") = 1; }));
+        AppField(oMsg, L"f1") = 100;                           // a rewrite is not a new field
+        TF_CHECK_EQ(AppField(oMsg, L"f1").AsInt(), 100);
+        TF_CHECK(!AppField(oMsg, L"one-too-many").Exists());
+    }
+
+    TF_CASE("AppFields -> facade: a facade receiver reads and lists what a direct client wrote")
+    {
+        P2PeerMsg32 oMsg(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        MsgViewOf<AppTelemetry> msg(AppFields(oMsg));
+        msg->device = L"sensor-04";
+        msg->uptime = 86400;
+        AppField(oMsg, L"ratio") = 0.25;
+        AppField(oMsg, L"empty") = L"";
+
+        std::vector<unsigned char> v;
+        TF_CHECK(FacadeGetField(oMsg, L"device", v) && FacadeFieldText(v) == L"sensor-04");
+        TF_CHECK(FacadeGetField(oMsg, L"uptime", v) && v == BytesOf((INT32)86400));
+        TF_CHECK(FacadeGetField(oMsg, L"ratio", v) && v == BytesOf(0.25));
+        TF_CHECK(FacadeGetField(oMsg, L"empty", v) && FacadeFieldText(v).empty() && v.size() == 2);
+        TF_CHECK(!FacadeGetField(oMsg, L"absent", v));
+
+        std::vector<std::wstring> names = FacadeFieldNames(oMsg);
+        TF_CHECK_EQ((int)names.size(), 4);
+        if ( names.size() == 4 )
+            TF_CHECK(names[0] == L"device" && names[1] == L"uptime" &&
+                     names[2] == L"ratio"  && names[3] == L"empty");
+    }
+
+    TF_CASE("AppFields -> facade: why it is Bytes -- a TYPED field is absent to the facade")
+    {
+        // The negative that justifies the coding. The same value written with
+        // the default (typed) coding into the same item is invisible.
+        P2PeerMsg32 oMsg(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        AppField(oMsg, L"probe") = 1;                           // creates P2PF$Fields
+        P3PmsgItem& root = oMsg.r_item(VBLockBSTR_ROOT);
+        Field(root.SelectItem(L"P2PF$Fields"), L"typed") = 86400;
+        std::vector<unsigned char> v;
+        TF_CHECK(!FacadeGetField(oMsg, L"typed", v));
+        TF_CHECK(FacadeGetField(oMsg, L"probe", v));
+    }
+
+    TF_CASE("facade -> AppFields: a direct client reads what a facade sender wrote")
+    {
+        P2PeerMsg32 oMsg(L"App.Src", L"App.Dst", P2Pmsg_BCast, L"x", (P2Psize_t)sizeof(wchar_t) * 2);
+        const unsigned char raw[] = { 1, 2, 3 };
+        FacadePostFields(oMsg, {
+            { L"device",  TextBytes(L"sensor-04") },
+            { L"uptime",  BytesOf((INT32)86400) },
+            { L"serial",  BytesOf((INT64)9000000000LL) },
+            { L"online",  std::vector<unsigned char>(1, 1) },
+            { L"samples", std::vector<unsigned char>(raw, raw + sizeof raw) },
+        });
+
+        MsgViewOf<AppTelemetry> msg(AppFields(oMsg));
+        TF_CHECK(msg->device.Get() == L"sensor-04");
+        TF_CHECK_EQ((int)msg->uptime, 86400);
+        TF_CHECK(AppField(oMsg, L"serial").AsInt64() == 9000000000LL);
+        TF_CHECK(AppField(oMsg, L"online").AsBool());
+        MsgBlob b = AppField(oMsg, L"samples").AsBlob();
+        TF_CHECK(b.size() == 3 && b.bytes[2] == 3);
+
+        std::vector<std::wstring> names = AppFieldNames(oMsg);
+        TF_CHECK_EQ((int)names.size(), 5);
+        // And a direct client ADDING to a facade-made message extends its
+        // index rather than replacing it.
+        AppField(oMsg, L"note") = L"added";
+        names = FacadeFieldNames(oMsg);
+        TF_CHECK_EQ((int)names.size(), 6);
+        if ( names.size() == 6 ) TF_CHECK(names[0] == L"device" && names[5] == L"note");
     }
 }
 
@@ -1488,6 +1758,7 @@ static void Test_UndeliverableReportBounded()
 void RunTargetcoreSuite()
 {
     Test_MessageValuePlumbing();
+    Test_AppFields();
     Test_AddrNameAccessors();
     Test_InMemoryTwoHubDelivery();
     Test_UndeliverableCascade();

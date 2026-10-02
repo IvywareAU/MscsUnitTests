@@ -83,6 +83,41 @@ target_link_libraries(unit_suite PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME unit_suite COMMAND unit_suite)
 set_tests_properties(unit_suite PROPERTIES TIMEOUT 60)
 
+# msgfield_cf_*: what a MSG_FIELD view must REFUSE to compile (MsgFieldAccessPlan.md
+# F2) -- text into an int field, and a field name past Msgcore's 63 units. Both are
+# static_asserts in Msgcore/MsgFieldRef.hpp; the runtime half of the plan's F1/F2 is
+# in unit_suite (MsgcoreSuite.cpp).
+#
+# One source, three object libraries. The control is in the normal build, so a
+# header that stops compiling breaks the build instead of quietly satisfying both
+# negatives. The negatives are EXCLUDE_FROM_ALL and each test builds one and passes
+# only if the output carries the header's own static_assert sentence.
+#
+# NOT WILL_FAIL. Inverting the exit code would pass on ANY compile error, a missing
+# include included; matching the sentence passes on exactly the refusal under test,
+# and a build that wrongly succeeds prints no sentence and fails.
+foreach(_cf control badtype longname)
+    if(_cf STREQUAL "control")
+        add_library(msgfield_cf_${_cf} OBJECT msgfield_cf.cpp)
+    else()
+        add_library(msgfield_cf_${_cf} OBJECT EXCLUDE_FROM_ALL msgfield_cf.cpp)
+        string(TOUPPER ${_cf} _cf_upper)
+        target_compile_definitions(msgfield_cf_${_cf} PRIVATE MSGFIELD_CF_${_cf_upper})
+    endif()
+    _mscs_test_common(msgfield_cf_${_cf})
+    target_link_libraries(msgfield_cf_${_cf} PRIVATE msgcore p2pplatform)
+endforeach()
+add_test(NAME msgfield_cf_badtype
+         COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}
+                 --target msgfield_cf_badtype --config $<CONFIG>)
+add_test(NAME msgfield_cf_longname
+         COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}
+                 --target msgfield_cf_longname --config $<CONFIG>)
+set_tests_properties(msgfield_cf_badtype PROPERTIES TIMEOUT 300
+    PASS_REGULAR_EXPRESSION "MSG_FIELD: this value's type is not the field's declared type")
+set_tests_properties(msgfield_cf_longname PROPERTIES TIMEOUT 300
+    PASS_REGULAR_EXPRESSION "a Msgcore name holds at most 63 UTF-16 units")
+
 # msgcore_u8_smoke / p2p_u8_smoke: the UTF-8 (_u8) C-API round-trips (§6). Prove a UTF-8
 # string (1/2/3/4-byte incl. astral U+1F680) round-trips name+value byte-identically — the
 # cross-platform-FFI guarantee (the same exe produces identical bytes on both OSes).

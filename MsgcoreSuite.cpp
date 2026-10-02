@@ -37,10 +37,12 @@
 #include "Msgexception.h"
 #include "P2PmsgMgr.h"
 #include "P2PmsgBSTR.h"
+#include "MsgFieldRef.hpp"
 
 #include "TestFramework.h"
 
 #include <cmath>
+#include <functional>
 
 using namespace std;
 
@@ -180,6 +182,59 @@ static void Test_Field_NameAndData()
         P3PmsgName oAstralBad(L"keep");
         TF_CHECK(rejects( oAstralBad, a32.c_str() ));
         TF_CHECK(oAstralBad.c_size() == 4);
+    }
+
+    // The same overrun reached through a FIELD, not a bare name. Until
+    // 2026-10-02 this was heap corruption, not an exception: the P3PmsgField
+    // constructors alias both bases' m_pObject onto the member m_oObject
+    // (RenderThisSafe) before c_name throws, and the base destructors that
+    // unwind the half-built field `delete` that member address. MSVC Debug
+    // reported it as _CrtIsValidHeapPointer -- which this runner's assert hook
+    // folds into a FAILED CHECK, so these cases fail loudly if it comes back.
+    TF_CASE("a field built with a 64-unit name throws cleanly; the unwind frees nothing it does not own")
+    {
+        auto throws = []( auto fn ) -> bool {
+            try { fn(); return false; }
+            catch ( P2Pevent* pEVT ) { if ( pEVT ) pEVT->Cancel(false); return true; }
+        };
+        const std::wstring n64(64, L'n');
+        TF_CHECK(throws([&]{ P3PmsgField f( n64.c_str(), P3PmsgData((int)1) ); }));
+        TF_CHECK(throws([&]{ P3PmsgField f( n64.c_str(), (size_t)0 ); }));
+
+        // And through DeclareItem, which is how it was found: the parent is
+        // left exactly as it was, and still usable.
+        P3PmsgField oRoot(L"Root");
+        oRoot.DeclareItem(L"kept", P3PmsgData((int)7));
+        TF_CHECK(throws([&]{ oRoot.DeclareItem(n64.c_str(), P3PmsgData((int)1)); }));
+        TF_CHECK(oRoot.SelectItem(L"kept").c_int() == 7);
+        oRoot.DeclareItem(L"after", P3PmsgData((int)8));
+        TF_CHECK(oRoot.SelectItem(L"after").c_int() == 8);
+    }
+
+    // A path COMPONENT longer than any name. ParseObjectPath copied it into a
+    // MAX_TNAME_SIZE stack array with only an ASSERT(0) on overrun, so at 64
+    // units the array was left unterminated (ASan, Linux: a 260-byte read out
+    // of P3Pmsg_SelectObjectRecurse's frame) and past that it was written off
+    // the end -- in Release, where the ASSERT is compiled out. Paths are caller
+    // data (RootPath2Object answers queries from across the mesh), so the
+    // answer is "no such object", which is what a name that matches nothing
+    // already gets.
+    TF_CASE("a path component longer than any name selects nothing and overruns nothing")
+    {
+        P3PmsgField oRoot(L"Root");
+        oRoot.DeclareItem(L"a", P3PmsgData((int)1));
+        oRoot.SelectItem(L"a").DeclareItem(L"b", P3PmsgData((int)2));
+        for ( size_t n : { (size_t)63, (size_t)64, (size_t)65, (size_t)1000 } )
+        {
+            const std::wstring big(n, L'z');
+            TF_CHECK(!oRoot.Exists(big.c_str()));
+            TF_CHECK(oRoot.SelectObject(big.c_str()).IsVoid());
+            TF_CHECK(oRoot.SelectObject((L"a." + big).c_str()).IsVoid());
+            TF_CHECK(oRoot.SelectObject((L"." + big).c_str()).IsVoid());
+            TF_CHECK(oRoot.SelectObject((big + L".b").c_str()).IsVoid());
+        }
+        // The ordinary path still resolves, so the guard refused only the overlong.
+        TF_CHECK(!oRoot.SelectObject(L"a.b").IsVoid());
     }
 }
 
@@ -1314,8 +1369,460 @@ static void Test_VBLockItem_UnknownType()
 }
 
 // ---------------------------------------------------------------------------
+// Field access by name -- MsgFieldRef.hpp (MsgFieldAccessPlan.md, F0-F2)
+//
+// F0 pins the three Msgcore behaviours the proxy is built on. They were open
+// questions when the plan was written; these are the answers, and if one ever
+// changes the proxy's reasoning changes with it.
+// ---------------------------------------------------------------------------
+namespace {
+
+bool ThrowsP2Pevent ( const std::function<void()>& fn )
+{
+    try { fn(); return false; }
+    catch ( P2Pevent* pEVT ) { if ( pEVT ) pEVT->Cancel(false); return true; }
+}
+
+// Every case that reads bytes back wants the same comparison.
+bool SameBytes ( const MsgBlob& b, const void* pv, size_t cb )
+{
+    return b.size() == cb && ( cb == 0 || std::memcmp ( b.data(), pv, cb ) == 0 );
+}
+
+struct Telemetry : MsgView
+{
+    MSG_FIELD ( device,  std::wstring );
+    MSG_FIELD ( uptime,  int );
+    MSG_FIELD ( serial,  long long );
+    MSG_FIELD ( ratio,   double );
+    MSG_FIELD ( online,  bool );
+    MSG_FIELD ( samples, MsgBlob );
+    MSG_FIELD ( backup,  std::wstring );
+};
+
+} // namespace
+
+static void Test_FieldAccess_F0Facts()
+{
+    TF_CASE("F0: DeclareItem(name, data, TRUE) replaces the tag as well as the value")
+    {
+        P3PmsgField oRoot(L"Root");
+        oRoot.DeclareItem(L"x", P3PmsgData((int)5));
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"x").r_data().DataType(), VBLockData_INT32);
+        oRoot.DeclareItem(L"x", P3PmsgData(L"text"), TRUE);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"x").r_data().DataType(), VBLockData_WSTR16);
+        TF_CHECK(wcscmp(oRoot.SelectItem(L"x").c_wstr(), L"text") == 0);
+        oRoot.DeclareItem(L"x", P3PmsgData(2.5), TRUE);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"x").r_data().DataType(), VBLockData_DOUBLE);
+        TF_CHECK(oRoot.SelectItem(L"x").c_double() == 2.5);
+    }
+
+    TF_CASE("F0: c_size() of a rewritten BLOB16 is the STORED length, not the capacity")
+    {
+        // Open in C++23_vs_Legacy.md until this. A 5-byte cell rewritten with 3
+        // bytes reports 3, so a reader that sizes its copy by c_size() gets
+        // exactly what the last writer wrote -- growing and emptying included.
+        unsigned char buf[40] = { 1, 2, 3, 4, 5 };
+        P3PmsgField oRoot(L"Root");
+        oRoot.DeclareItem(L"b", P3PmsgData((const void*)buf, 5, VBLockData_BLOB16));
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"b").r_data().c_size(), 5);
+        oRoot.DeclareItem(L"b", P3PmsgData((const void*)buf, 3, VBLockData_BLOB16), TRUE);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"b").r_data().c_size(), 3);
+        oRoot.DeclareItem(L"b", P3PmsgData((const void*)buf, 40, VBLockData_BLOB16), TRUE);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"b").r_data().c_size(), 40);
+        oRoot.DeclareItem(L"b", P3PmsgData((const void*)buf, 0, VBLockData_BLOB16), TRUE);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"b").r_data().c_size(), 0);
+        // And a WSTR16's is its UTF-16 bytes WITHOUT a terminator.
+        oRoot.DeclareItem(L"w", P3PmsgData(L"abc"));
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"w").r_data().c_size(), 6);
+    }
+
+    TF_CASE("F0: c_vBlob refuses every scalar tag but not a string tag")
+    {
+        // Why app fields travel as blobs: TargetFacade reads a field with
+        // c_vBlob(), so a typed INT32 is an ABSENT field to a facade receiver,
+        // and a WSTR16 comes back without the terminator fieldText() strips.
+        P3PmsgField oRoot(L"Root");
+        oRoot.DeclareItem(L"i", P3PmsgData((int)7));
+        oRoot.DeclareItem(L"d", P3PmsgData(1.0));
+        oRoot.DeclareItem(L"w", P3PmsgData(L"abc"));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)oRoot.SelectItem(L"i").c_vBlob(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)oRoot.SelectItem(L"d").c_vBlob(); }));
+        TF_CHECK(!ThrowsP2Pevent([&]{ (void)oRoot.SelectItem(L"w").c_vBlob(); }));
+    }
+}
+
+static void Test_FieldRef_Typed()
+{
+    TF_CASE("MsgFieldRef: every overload round-trips under its own tag")
+    {
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"i")  = 86400;
+        Field(oRoot, L"i0") = -1;
+        Field(oRoot, L"l")  = 1234567890123LL;
+        Field(oRoot, L"d")  = 2.5;
+        Field(oRoot, L"bt") = true;
+        Field(oRoot, L"bf") = false;
+        Field(oRoot, L"w")  = L"sensor-04";
+        Field(oRoot, L"s")  = std::wstring(L"std-string");
+        Field(oRoot, L"e")  = L"";
+        const unsigned char raw[] = { 0, 1, 2, 0xFF, 0x80 };
+        Field(oRoot, L"b")  = MsgBlob(raw, sizeof raw);
+        Field(oRoot, L"b0") = MsgBlob();
+
+        TF_CHECK_EQ(Field(oRoot, L"i").AsInt(), 86400);
+        TF_CHECK_EQ(Field(oRoot, L"i0").AsInt(), -1);
+        TF_CHECK(Field(oRoot, L"l").AsInt64() == 1234567890123LL);
+        TF_CHECK(Field(oRoot, L"d").AsReal() == 2.5);
+        TF_CHECK(Field(oRoot, L"bt").AsBool() == true);
+        TF_CHECK(Field(oRoot, L"bf").AsBool() == false);
+        TF_CHECK(Field(oRoot, L"w").AsText() == L"sensor-04");
+        TF_CHECK(Field(oRoot, L"s").AsText() == L"std-string");
+        TF_CHECK(Field(oRoot, L"e").AsText().empty());
+        TF_CHECK(SameBytes(Field(oRoot, L"b").AsBlob(), raw, sizeof raw));
+        TF_CHECK(Field(oRoot, L"b0").AsBlob().empty());
+
+        TF_CHECK_EQ((int)Field(oRoot, L"i").DataType(),  VBLockData_INT32);
+        TF_CHECK_EQ((int)Field(oRoot, L"l").DataType(),  VBLockData_INT64);
+        TF_CHECK_EQ((int)Field(oRoot, L"d").DataType(),  VBLockData_DOUBLE);
+        TF_CHECK_EQ((int)Field(oRoot, L"bt").DataType(), VBLockData_BOOL);
+        TF_CHECK_EQ((int)Field(oRoot, L"w").DataType(),  VBLockData_WSTR16);
+        TF_CHECK_EQ((int)Field(oRoot, L"b").DataType(),  VBLockData_BLOB16);
+        // And what was written is what the plain API reads -- the proxy adds
+        // no wrapping of its own.
+        TF_CHECK_EQ(oRoot.SelectItem(L"i").c_int(), 86400);
+        TF_CHECK(wcscmp(oRoot.SelectItem(L"w").c_wstr(), L"sensor-04") == 0);
+    }
+
+    TF_CASE("MsgFieldRef: a narrow literal is UTF-8 and is stored as UTF-16")
+    {
+        // Plan 3.3 #2: one storage form for text, so every reader asks the
+        // same way. 2-, 3- and 4-byte sequences; the last is astral and is
+        // two UTF-16 units on BOTH platforms.
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"ascii") = "assign this";
+        Field(oRoot, L"multi") = "caf\xC3\xA9 \xE2\x82\xAC";           // cafe-acute, euro
+        Field(oRoot, L"astro") = "\xF0\x9F\x9A\x80";                   // U+1F680
+        TF_CHECK_EQ((int)Field(oRoot, L"ascii").DataType(), VBLockData_WSTR16);
+        TF_CHECK(wcscmp(oRoot.SelectItem(L"ascii").c_wstr(), L"assign this") == 0);
+        // Expected values as hex escapes: a BOM-less source is read as ANSI by
+        // MSVC, so a literal non-ASCII character here would not be one.
+        TF_CHECK(Field(oRoot, L"multi").AsText() == L"caf\x00E9 \x20AC");
+        TF_CHECK(Field(oRoot, L"astro").AsText() == L"\U0001F680");
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"astro").r_data().c_size(), 4);
+        // Malformed input is replaced, not thrown over.
+        Field(oRoot, L"bad") = "a\xFF" "b\xC3";
+        TF_CHECK(Field(oRoot, L"bad").AsText() == L"a\xFFFD" L"b\xFFFD");
+    }
+
+    TF_CASE("MsgFieldRef: a rewrite may change the type, and the old reader then refuses")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldRef x = Field(oRoot, L"x");
+        x = 5;
+        TF_CHECK_EQ(x.AsInt(), 5);
+        x = L"five";
+        TF_CHECK(x.AsText() == L"five");
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)x.AsInt(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)x.AsBlob(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)x.AsReal(); }));
+    }
+
+    TF_CASE("MsgFieldRef: a missing field is not created by reading it")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldRef m = Field(oRoot, L"missing");
+        TF_CHECK(!m.Exists());
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)m.AsInt(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)m.AsText(); }));
+        TF_CHECK(!m.Erase());
+        TF_CHECK(!oRoot.Exists(L"missing"));
+    }
+
+    TF_CASE("MsgFieldRef: Erase removes the field")
+    {
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"a") = 1;
+        Field(oRoot, L"b") = 2;
+        TF_CHECK(Field(oRoot, L"a").Erase());
+        TF_CHECK(!Field(oRoot, L"a").Exists());
+        TF_CHECK_EQ(Field(oRoot, L"b").AsInt(), 2);
+        Field(oRoot, L"a") = 3;                       // and comes back on a write
+        TF_CHECK_EQ(Field(oRoot, L"a").AsInt(), 3);
+    }
+
+    TF_CASE("MsgFieldRef: a 64-unit name is refused cleanly, leaf or path")
+    {
+        // MsgFieldRef::CheckName refuses before the tree is touched. (Msgcore's
+        // own throw for this used to corrupt the heap; that is fixed and has
+        // its own case in Test_Field_NameAndData.)
+        P3PmsgField oRoot(L"Root");
+        std::wstring n63(63, L'n'), n64(64, L'n');
+        Field(oRoot, n63.c_str()) = 1;
+        TF_CHECK_EQ(Field(oRoot, n63.c_str()).AsInt(), 1);
+        TF_CHECK(ThrowsP2Pevent([&]{ Field(oRoot, n64.c_str()) = 1; }));
+        TF_CHECK(ThrowsP2Pevent([&]{ Field(oRoot, n64.c_str())[L"x"] = 1; }));
+        TF_CHECK(!oRoot.Exists(n64.c_str()));
+        // 31 astral characters are 62 units and fit; 32 are 64 and do not.
+        std::wstring a31, a32;
+        for ( int i = 0; i < 31; ++i ) a31 += L"\U0001F680";
+        a32 = a31 + L"\U0001F680";
+        Field(oRoot, a31.c_str()) = 2;
+        TF_CHECK_EQ(Field(oRoot, a31.c_str()).AsInt(), 2);
+        TF_CHECK(ThrowsP2Pevent([&]{ Field(oRoot, a32.c_str()) = 2; }));
+    }
+
+    TF_CASE("MsgFieldRef: refs hold names, not cursor items, so interleaving is safe")
+    {
+        // Plan 3.3 #5. Each write below moves the parent's cursor; a ref that
+        // had kept SelectItem's answer would now be naming a sibling.
+        P3PmsgField oRoot(L"Root");
+        MsgFieldRef a = Field(oRoot, L"a");
+        MsgFieldRef b = Field(oRoot, L"b");
+        MsgFieldRef c = Field(oRoot, L"c");
+        a = 1; b = 2; c = 3;
+        a = 10;
+        TF_CHECK_EQ(a.AsInt(), 10);
+        TF_CHECK_EQ(b.AsInt(), 2);
+        TF_CHECK_EQ(c.AsInt(), 3);
+        TF_CHECK_EQ(b.AsInt() + a.AsInt() + c.AsInt(), 15);
+    }
+
+    TF_CASE("MsgFieldRef: blob reads are alignment-safe at every offset")
+    {
+        // A payload starts wherever the pack(1) walk lands. Names of lengths
+        // 1..8 shift it through every residue; on the Linux box under UBSan a
+        // read through c_vBlob()'s pointer would report here, and AsBlob does
+        // not, because it copies out through c_vBlobCopy.
+        P3PmsgField oRoot(L"Root");
+        const double vals[] = { 1.5, -2.25, 3.125, 1e300, -0.0, 6.5, 7.75, 8.0 };
+        std::wstring name;
+        for ( int i = 0; i < 8; ++i )
+        {
+            name += L'k';
+            Field(oRoot, name.c_str()) = MsgBlob(&vals[i], sizeof(double));
+        }
+        name.clear();
+        bool bAll = true;
+        for ( int i = 0; i < 8; ++i )
+        {
+            name += L'k';
+            MsgBlob b = Field(oRoot, name.c_str()).AsBlob();
+            double d = 0;
+            bAll = bAll && b.size() == sizeof d;
+            if ( b.size() == sizeof d ) std::memcpy(&d, b.data(), sizeof d);
+            bAll = bAll && std::memcmp(&d, &vals[i], sizeof d) == 0;
+        }
+        TF_CHECK(bAll);
+    }
+}
+
+static void Test_FieldRef_Bytes()
+{
+    TF_CASE("MsgFieldRef Bytes coding: every value is a blob of the documented size")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldAnchor a = MsgFieldAnchor::Of(oRoot, MsgFieldCoding::Bytes);
+        Field(a, L"i") = 86400;
+        Field(a, L"l") = -5LL;
+        Field(a, L"d") = 0.5;
+        Field(a, L"t") = true;
+        Field(a, L"w") = L"abc";
+        Field(a, L"u") = "\xF0\x9F\x9A\x80";
+        Field(a, L"e") = L"";
+
+        const wchar_t* const names[] = { L"i", L"l", L"d", L"t", L"w", L"u", L"e" };
+        bool bAllBlobs = true;
+        for ( auto n : names )
+            bAllBlobs = bAllBlobs && Field(a, n).DataType() == VBLockData_BLOB16;
+        TF_CHECK(bAllBlobs);
+
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"i").r_data().c_size(), 4);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"l").r_data().c_size(), 8);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"d").r_data().c_size(), 8);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"t").r_data().c_size(), 1);
+        // Text carries its terminator -- what SetFieldText writes.
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"w").r_data().c_size(), 8);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"u").r_data().c_size(), 6);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"e").r_data().c_size(), 2);
+        const unsigned char abcz[] = { 'a', 0, 'b', 0, 'c', 0, 0, 0 };
+        TF_CHECK(SameBytes(Field(a, L"w").AsBlob(), abcz, sizeof abcz));
+        const INT32 i86400 = 86400;
+        TF_CHECK(SameBytes(Field(a, L"i").AsBlob(), &i86400, sizeof i86400));
+
+        TF_CHECK_EQ(Field(a, L"i").AsInt(), 86400);
+        TF_CHECK(Field(a, L"l").AsInt64() == -5LL);
+        TF_CHECK(Field(a, L"d").AsReal() == 0.5);
+        TF_CHECK(Field(a, L"t").AsBool());
+        TF_CHECK(Field(a, L"w").AsText() == L"abc");
+        TF_CHECK(Field(a, L"u").AsText() == L"\U0001F680");
+        TF_CHECK(Field(a, L"e").AsText().empty());
+    }
+
+    TF_CASE("MsgFieldRef: readers accept either coding, so a reader never has to know")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldAnchor typed = MsgFieldAnchor::Of(oRoot);
+        MsgFieldAnchor bytes = MsgFieldAnchor::Of(oRoot, MsgFieldCoding::Bytes);
+        Field(typed, L"ti") = 7;      Field(bytes, L"bi") = 7;
+        Field(typed, L"tw") = L"hi";  Field(bytes, L"bw") = L"hi";
+        Field(typed, L"td") = 1.25;   Field(bytes, L"bd") = 1.25;
+        TF_CHECK_EQ(Field(bytes, L"ti").AsInt(), 7);
+        TF_CHECK_EQ(Field(typed, L"bi").AsInt(), 7);
+        TF_CHECK(Field(bytes, L"tw").AsText() == L"hi");
+        TF_CHECK(Field(typed, L"bw").AsText() == L"hi");
+        TF_CHECK(Field(bytes, L"td").AsReal() == 1.25);
+        TF_CHECK(Field(typed, L"bd").AsReal() == 1.25);
+        // A blob of the wrong SIZE is not the type: 4 bytes is not a double.
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(typed, L"bi").AsReal(); }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(typed, L"bi").AsBool(); }));
+    }
+}
+
+static void Test_FieldRef_Paths()
+{
+    TF_CASE("MsgFieldRef nesting: a write creates the path, a read creates nothing")
+    {
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"pos")[L"x"] = 1.5;
+        Field(oRoot, L"pos")[L"y"] = -2.5;
+        Field(oRoot, L"pos")[L"meta"][L"frame"] = L"world";
+        TF_CHECK(Field(oRoot, L"pos")[L"x"].AsReal() == 1.5);
+        TF_CHECK(Field(oRoot, L"pos")[L"y"].AsReal() == -2.5);
+        TF_CHECK(Field(oRoot, L"pos")[L"meta"][L"frame"].AsText() == L"world");
+        // Through the plain API, to be sure the tree is the obvious one.
+        TF_CHECK(oRoot.SelectItem(L"pos").SelectItem(L"x").c_double() == 1.5);
+
+        MsgFieldRef ghost = Field(oRoot, L"ghost")[L"child"];
+        TF_CHECK(!ghost.Exists());
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)ghost.AsInt(); }));
+        TF_CHECK(!oRoot.Exists(L"ghost"));
+    }
+
+    TF_CASE("MsgFieldRef nesting: siblings at two depths do not disturb each other")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldRef px = Field(oRoot, L"p")[L"x"];
+        MsgFieldRef qx = Field(oRoot, L"q")[L"x"];
+        MsgFieldRef top = Field(oRoot, L"top");
+        px = 1; qx = 2; top = 3; px = 4;
+        TF_CHECK_EQ(px.AsInt(), 4);
+        TF_CHECK_EQ(qx.AsInt(), 2);
+        TF_CHECK_EQ(top.AsInt(), 3);
+        TF_CHECK(px.Erase());
+        TF_CHECK(!px.Exists());
+        TF_CHECK_EQ(qx.AsInt(), 2);
+    }
+
+    TF_CASE("MsgFieldRef: works on a BSTR root, the item a message hands out")
+    {
+        P3PmsgBSTR oBstr;
+        P3PmsgItem& root = oBstr.r_item(VBLockBSTR_ROOT);
+        Field(root, L"a") = 1;
+        Field(root, L"b")[L"c"] = L"deep";
+        TF_CHECK_EQ(Field(oBstr.r_item(VBLockBSTR_ROOT), L"a").AsInt(), 1);
+        TF_CHECK(Field(root, L"b")[L"c"].AsText() == L"deep");
+    }
+}
+
+static void Test_FieldView()
+{
+    TF_CASE("MSG_FIELD view: msg->field = value, and reads by conversion")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Telemetry> msg(oRoot);
+        msg->device  = L"sensor-04";
+        msg->uptime  = 86400;
+        msg->serial  = 9000000000LL;
+        msg->ratio   = 0.75;
+        msg->online  = true;
+        const unsigned char raw[] = { 9, 8, 7 };
+        msg->samples = MsgBlob(raw, sizeof raw);
+
+        int          up  = msg->uptime;              // the plan's own example
+        std::wstring dev = msg->device;
+        TF_CHECK_EQ(up, 86400);
+        TF_CHECK(dev == L"sensor-04");
+        TF_CHECK(msg->serial.Get() == 9000000000LL);
+        TF_CHECK(msg->ratio.Get() == 0.75);
+        TF_CHECK(msg->online.Get());
+        TF_CHECK(SameBytes(msg->samples.Get(), raw, sizeof raw));
+        // The names are the identifiers -- the same field the dynamic form sees.
+        TF_CHECK_EQ(Field(oRoot, L"uptime").AsInt(), 86400);
+        TF_CHECK(Field(oRoot, L"device").AsText() == L"sensor-04");
+    }
+
+    TF_CASE("MSG_FIELD view: members take their type's family and convert within it")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Telemetry> msg(oRoot);
+        msg->uptime = (short)12;          // a narrower integer
+        TF_CHECK_EQ((int)msg->uptime, 12);
+        msg->serial = 7;                  // an int into a long long
+        TF_CHECK(msg->serial.Get() == 7LL);
+        TF_CHECK_EQ((int)Field(oRoot, L"serial").DataType(), VBLockData_INT64);
+        msg->ratio = 3;                   // an int into a double
+        TF_CHECK(msg->ratio.Get() == 3.0);
+        msg->device = "utf8 \xE2\x82\xAC"; // a narrow literal into text
+        TF_CHECK(msg->device.Get() == L"utf8 \x20AC");
+        msg->device = std::wstring(L"wide");
+        TF_CHECK(msg->device.Get() == L"wide");
+    }
+
+    TF_CASE("MSG_FIELD view: field-to-field assignment copies the value")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Telemetry> msg(oRoot);
+        msg->device = L"primary";
+        msg->backup = msg->device;
+        msg->device = L"changed";
+        TF_CHECK(msg->backup.Get() == L"primary");
+        TF_CHECK(msg->device.Get() == L"changed");
+    }
+
+    TF_CASE("MSG_FIELD view: Exists, Erase and the dynamic form on the same item")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Telemetry> msg(oRoot);
+        TF_CHECK(!msg->uptime.Exists());
+        TF_CHECK(ThrowsP2Pevent([&]{ int v = msg->uptime; (void)v; }));
+        msg->uptime = 1;
+        TF_CHECK(msg->uptime.Exists());
+        msg[L"extra"] = 5;                 // not declared by the view
+        TF_CHECK_EQ(msg[L"extra"].AsInt(), 5);
+        TF_CHECK_EQ(msg->Ref(L"extra").AsInt(), 5);
+        TF_CHECK(msg->uptime.Erase());
+        TF_CHECK(!Field(oRoot, L"uptime").Exists());
+    }
+
+    TF_CASE("MSG_FIELD view: a Bytes-coded view stores blobs and reads them back")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Telemetry> msg(oRoot, MsgFieldCoding::Bytes);
+        msg->device = L"dev";
+        msg->uptime = 42;
+        TF_CHECK_EQ((int)Field(oRoot, L"device").DataType(), VBLockData_BLOB16);
+        TF_CHECK_EQ((int)Field(oRoot, L"uptime").DataType(), VBLockData_BLOB16);
+        TF_CHECK(msg->device.Get() == L"dev");
+        TF_CHECK_EQ((int)msg->uptime, 42);
+    }
+
+    TF_CASE("MSG_FIELD view: a view that was never bound refuses rather than faulting")
+    {
+        Telemetry t;
+        TF_CHECK(ThrowsP2Pevent([&]{ t.uptime = 1; }));
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)t.uptime.Exists(); }));
+    }
+}
+
+// ---------------------------------------------------------------------------
 void RunMsgcoreSuite()
 {
+    Test_FieldAccess_F0Facts();
+    Test_FieldRef_Typed();
+    Test_FieldRef_Bytes();
+    Test_FieldRef_Paths();
+    Test_FieldView();
     Test_Data_TypedValues();
     Test_Data_CopySemantics();
     Test_Time();
