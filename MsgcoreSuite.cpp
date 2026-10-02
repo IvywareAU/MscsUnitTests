@@ -1400,6 +1400,23 @@ struct Telemetry : MsgView
     MSG_FIELD ( backup,  std::wstring );
 };
 
+struct Limits : MsgView
+{
+    MSG_FIELD ( low,  int );
+    MSG_FIELD ( high, int );
+};
+
+// Records what an anchor's hooks were told, for the Child() cases.
+struct HookLog
+{
+    std::vector<std::wstring> admitted;
+    std::vector<bool>         leaf;
+    std::vector<std::wstring> indexed;
+    static void Admit ( void *pv, LPCWSTR n, size_t, bool bLeaf )
+    { ((HookLog*)pv)->admitted.push_back ( n ); ((HookLog*)pv)->leaf.push_back ( bLeaf ); }
+    static void Index ( void *pv, LPCWSTR n, bool ) { ((HookLog*)pv)->indexed.push_back ( n ); }
+};
+
 } // namespace
 
 static void Test_FieldAccess_F0Facts()
@@ -1722,6 +1739,81 @@ static void Test_FieldRef_Paths()
         Field(root, L"b")[L"c"] = L"deep";
         TF_CHECK_EQ(Field(oBstr.r_item(VBLockBSTR_ROOT), L"a").AsInt(), 1);
         TF_CHECK(Field(root, L"b")[L"c"].AsText() == L"deep");
+    }
+
+    // MsgFieldAnchor::Child (2026-10-03). Four FieldAccessExamples harnesses
+    // each hand-rolled this resolver before it existed, because the obvious
+    // MsgViewOf<T>(oRoot.SelectItem(L"x")) binds the parent's CURSOR item.
+    TF_CASE("MsgFieldAnchor::Child: a view of a named child creates it on the write, not the read")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Limits> lim(MsgFieldAnchor::Child(oRoot, L"limits"));
+        TF_CHECK(!lim->low.Exists());
+        TF_CHECK(!oRoot.Exists(L"limits"));          // the read created nothing
+        lim->low = -40;
+        lim->high = 85;
+        TF_CHECK(oRoot.Exists(L"limits"));
+        TF_CHECK_EQ(oRoot.SelectItem(L"limits").SelectItem(L"low").c_int(), -40);
+        TF_CHECK_EQ(Field(oRoot, L"limits")[L"high"].AsInt(), 85);
+    }
+
+    TF_CASE("MsgFieldAnchor::Child: survives the parent's cursor moving, where SelectItem's item does not")
+    {
+        P3PmsgField oRoot(L"Root");
+        Field(oRoot, L"a")[L"low"] = 1;
+        Field(oRoot, L"b")[L"low"] = 2;
+        MsgViewOf<Limits> byChild(MsgFieldAnchor::Child(oRoot, L"a"));
+        P3PmsgItem& cursor = oRoot.SelectItem(L"a");   // the parent's cursor item
+        TF_CHECK(&cursor == &oRoot.SelectItem(L"b"));   // ONE object, now standing on b
+        TF_CHECK_EQ(Field(cursor, L"low").AsInt(), 2);  // so the held "a" reads b
+        TF_CHECK_EQ((int)byChild->low, 1);              // the anchor finds a by name ...
+        // ... and its lookup moved that same cursor back: an anchor protects
+        // ITSELF, not a reference someone else is holding.
+        TF_CHECK_EQ(Field(cursor, L"low").AsInt(), 1);
+    }
+
+    TF_CASE("MsgFieldAnchor::Child: chains, and agrees with [] nesting and Anchor()")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgFieldAnchor deep = MsgFieldAnchor::Child(MsgFieldAnchor::Child(oRoot, L"x"), L"y");
+        Field(deep, L"z") = 7;
+        TF_CHECK_EQ(Field(oRoot, L"x")[L"y"][L"z"].AsInt(), 7);
+        MsgViewOf<Limits> v(Field(oRoot, L"x")[L"y"].Anchor());
+        v->high = 9;
+        TF_CHECK_EQ(Field(deep, L"high").AsInt(), 9);
+        TF_CHECK(Field(deep, L"z").Erase());
+        TF_CHECK(!Field(oRoot, L"x")[L"y"][L"z"].Exists());
+        TF_CHECK(Field(oRoot, L"x")[L"y"].Exists());   // erasing a leaf leaves its parents
+    }
+
+    TF_CASE("MsgFieldAnchor::Child: keeps the coding, checks every name, and hooks see the first name")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Limits> wire(MsgFieldAnchor::Child(oRoot, L"lim", MsgFieldCoding::Bytes));
+        wire->low = 3;
+        TF_CHECK_EQ((int)Field(oRoot, L"lim")[L"low"].DataType(), VBLockData_BLOB16);
+        TF_CHECK_EQ((int)wire->low, 3);
+
+        std::wstring n64(64, L'n');
+        MsgFieldAnchor bad = MsgFieldAnchor::Child(oRoot, n64.c_str());
+        TF_CHECK(ThrowsP2Pevent([&]{ Field(bad, L"v") = 1; }));
+        TF_CHECK(!oRoot.Exists(n64.c_str()));
+
+        // A hooked anchor, the shape AppFields() builds: one context for the
+        // resolver and both hooks.
+        HookLog log;
+        struct Ctx { P3PmsgItem* p; HookLog* log; } ctx { &oRoot, &log };
+        MsgFieldAnchor hooked;
+        hooked.pvCtx      = &ctx;
+        hooked.pfnResolve = [](void* pv, bool) -> P3PmsgItem* { return ((Ctx*)pv)->p; };
+        hooked.pfnAdmit   = [](void* pv, LPCWSTR n, size_t cb, bool b) { HookLog::Admit(((Ctx*)pv)->log, n, cb, b); };
+        hooked.pfnIndex   = [](void* pv, LPCWSTR n, bool b) { HookLog::Index(((Ctx*)pv)->log, n, b); };
+        Field(MsgFieldAnchor::Child(hooked, L"grp"), L"leaf") = 1;
+        TF_CHECK_EQ((int)log.admitted.size(), 1);
+        TF_CHECK(log.admitted.size() == 1 && log.admitted[0] == L"grp" && !log.leaf[0]);
+        TF_CHECK(log.indexed.empty());          // the leaf is not directly under the parent
+        Field(hooked, L"top") = 2;
+        TF_CHECK(log.indexed.size() == 1 && log.indexed[0] == L"top");
     }
 }
 
