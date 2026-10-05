@@ -776,6 +776,8 @@ static void Test_CApiHandleGuards()
         TF_CHECK_EQ(p2peerconwsa_listen        ((P2PeerConWsaHandle)hWild), 0);
         TF_CHECK_EQ((int)p2peerconwsa_get_state((P2PeerConWsaHandle)hWild, 0xFFFFFFFF), 0);
         TF_CHECK(p2peerconwsa_get_address      ((P2PeerConWsaHandle)hWild) == nullptr);
+        TF_CHECK_EQ(p2peerconwsa_set_family    ((P2PeerConWsaHandle)hWild, 1), 0);
+        TF_CHECK_EQ(p2peerconwsa_get_family    ((P2PeerConWsaHandle)hWild), 0);
         TF_CHECK_EQ((int)p2peerhub_get_hub_id((P2PeerHubHandle)hWild), 0);
         TF_CHECK(p2peerhub_get_address       ((P2PeerHubHandle)hWild) == nullptr);
         TF_CHECK(p2peerhub_spawn_hub         ((P2PeerHubHandle)hWild) == nullptr);
@@ -809,6 +811,46 @@ static void Test_CApiHandleGuards()
         TF_CHECK(p2paddr_c_name(nullptr) == nullptr);
         TF_CHECK_EQ(p2paddr_is_null(nullptr), 1);
         p2paddr_destroy(nullptr);
+    }
+
+    // The family setter is the one place an FFI int becomes a kernel enum, so
+    // the range check is the case: an out-of-range value must leave the family
+    // as it was rather than reach SocketFamily() as "not IPv6".  No socket is
+    // opened -- p2p_ipv6 measures what each family does on the wire.
+    TF_CASE("set_family records 0..2 and refuses anything else")
+    {
+        P2PeerConWsaHandle hSvc = p2peerconwsa_service_factory(L"M1Suite.Fam", 7899);
+        TF_CHECK(hSvc != nullptr);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hSvc), 0);       // IPv4 by default
+        TF_CHECK_EQ(p2peerconwsa_set_family(hSvc, 1), 1);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hSvc), 1);
+        TF_CHECK_EQ(p2peerconwsa_set_family(hSvc, 2), 1);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hSvc), 2);
+        TF_CHECK_EQ(p2peerconwsa_set_family(hSvc, 3),  0);
+        TF_CHECK_EQ(p2peerconwsa_set_family(hSvc, -1), 0);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hSvc), 2);       // untouched by either
+        TF_CHECK_EQ(p2peerconwsa_set_family(hSvc, 0), 1);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hSvc), 0);
+        p2peerconwsa_destroy(hSvc);
+
+        // A client's family starts from what it dials: a v6 literal can only be
+        // reached over IPv6, a name or a dotted quad keeps the IPv4 default.
+        P2PeerConWsaHandle hCli = p2peerconwsa_client_factory(L"M1Suite.Fam", L"::1", 7899);
+        TF_CHECK(hCli != nullptr);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hCli), 1);
+        TF_CHECK_EQ(p2peerconwsa_set_family(hCli, 2), 1);    // and the caller still decides
+        TF_CHECK_EQ(p2peerconwsa_get_family(hCli), 2);
+        p2peerconwsa_destroy(hCli);
+
+        hCli = p2peerconwsa_client_factory(L"M1Suite.Fam", L"fe80::1%1", 7899);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hCli), 1);       // a zone index is still v6
+        p2peerconwsa_destroy(hCli);
+        hCli = p2peerconwsa_client_factory(L"M1Suite.Fam", L"127.0.0.1", 7899);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hCli), 0);
+        p2peerconwsa_destroy(hCli);
+        hCli = p2peerconwsa_client_factory(L"M1Suite.Fam", L"localhost", 7899);
+        TF_CHECK_EQ(p2peerconwsa_get_family(hCli), 0);
+        p2peerconwsa_destroy(hCli);
     }
 
     TF_CASE("a destroyed handle is refused, and destroying it twice is a no-op")
