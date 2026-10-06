@@ -2097,6 +2097,174 @@ static void Test_FieldView()
 }
 
 // ---------------------------------------------------------------------------
+// Nested views: MSG_NODE / MSG_FIELD_NODE, obj->f1->f2->f3 = v
+// ---------------------------------------------------------------------------
+struct XFields : MsgView
+{
+    MSG_FIELD ( something, std::wstring );
+};
+struct Window : MsgView
+{
+    MSG_FIELD_NODE ( x, int, XFields );
+    MSG_FIELD ( y, int );
+};
+struct Settings : MsgView
+{
+    MSG_FIELD_NODE ( window, std::wstring, Window );
+    MSG_NODE ( spare, Window );
+};
+
+// Four levels, a different type at each.
+struct L4 : MsgView { MSG_FIELD ( f4, std::wstring ); };
+struct L3 : MsgView { MSG_FIELD_NODE ( f3, long long, L4 ); };
+struct L2 : MsgView { MSG_FIELD_NODE ( f2, bool, L3 ); };
+struct L1 : MsgView { MSG_FIELD_NODE ( f1, double, L2 ); };
+
+static void Test_FieldView_Nested()
+{
+    TF_CASE("MSG_FIELD_NODE: a field holds a value and children, reached by ->")
+    {
+        P3PmsgField oRoot(L"Settings");
+        MsgViewOf<Settings> obj(oRoot);
+        obj->window = L"";
+        obj->window->x = 1240;
+        obj->window->x->something = "qu";
+        obj->window->y = 820;
+
+        TF_CHECK_EQ((int)obj->window->x, 1240);
+        TF_CHECK(obj->window->x->something.Get() == L"qu");
+        TF_CHECK_EQ((int)obj->window->y, 820);
+        TF_CHECK(obj->window.Get() == L"");
+        // The same tree the long-hand calls see, each under its own tag.
+        TF_CHECK_EQ(oRoot.SelectItem(L"window").SelectItem(L"x").c_int(), 1240);
+        TF_CHECK_EQ((int)Field(oRoot, L"window")[L"x"][L"something"].DataType(), VBLockData_WSTR16);
+        TF_CHECK_EQ((int)Field(oRoot, L"window").DataType(), VBLockData_WSTR16);
+        // Giving x children did not disturb its value, nor the reverse.
+        obj->window->x = 7;
+        TF_CHECK(obj->window->x->something.Get() == L"qu");
+    }
+
+    TF_CASE("MSG_FIELD_NODE: four levels, four types, and the write creates the path")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<L1> obj(oRoot);
+        obj->f1->f2->f3->f4 = L"deep";             // nothing above it exists yet
+        TF_CHECK(Field(oRoot, L"f1")[L"f2"][L"f3"][L"f4"].AsText() == L"deep");
+        TF_CHECK(Field(oRoot, L"f1")[L"f2"][L"f3"].Exists());
+        TF_CHECK(ThrowsP2Pevent([&]{ double d = obj->f1; (void)d; }));   // a branch, no value yet
+
+        obj->f1 = 1.5;
+        obj->f1->f2 = true;
+        obj->f1->f2->f3 = 9000000000LL;
+        TF_CHECK(obj->f1.Get() == 1.5);
+        TF_CHECK(obj->f1->f2.Get());
+        TF_CHECK(obj->f1->f2->f3.Get() == 9000000000LL);
+        TF_CHECK_EQ((int)Field(oRoot, L"f1").DataType(), VBLockData_DOUBLE);
+        TF_CHECK_EQ((int)Field(oRoot, L"f1")[L"f2"].DataType(), VBLockData_BOOL);
+        TF_CHECK_EQ((int)Field(oRoot, L"f1")[L"f2"][L"f3"].DataType(), VBLockData_INT64);
+        TF_CHECK(obj->f1->f2->f3->f4.Get() == L"deep");
+    }
+
+    TF_CASE("MSG_NODE: a read creates nothing, at any depth")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Settings> obj(oRoot);
+        TF_CHECK(!obj->spare->x->something.Exists());
+        TF_CHECK(!obj->spare.Exists());
+        TF_CHECK(ThrowsP2Pevent([&]{ int v = obj->spare->y; (void)v; }));
+        TF_CHECK(!oRoot.Exists(L"spare"));
+        obj->spare->y = 3;                         // a branch with no value of its own
+        TF_CHECK(obj->spare.Exists());
+        TF_CHECK_EQ((int)obj->spare->y, 3);
+    }
+
+    TF_CASE("MSG_NODE: Anchor() keeps a view, [] reaches the undeclared, Erase removes the branch")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Settings> obj(oRoot);
+        MsgViewOf<Window> win(obj->window.Anchor());
+        win->x = 5;
+        win->x->something = L"held";
+        TF_CHECK_EQ((int)obj->window->x, 5);
+        TF_CHECK(obj->window->x->something.Get() == L"held");
+
+        obj->window->x[L"extra"] = 2.5;            // not declared by XFields
+        TF_CHECK(obj->window->x->Ref(L"extra").AsReal() == 2.5);
+        obj->spare[L"z"] = 1;
+        TF_CHECK_EQ(Field(oRoot, L"spare")[L"z"].AsInt(), 1);
+
+        TF_CHECK(obj->window.Erase());
+        TF_CHECK(!oRoot.Exists(L"window"));
+        TF_CHECK(!win->x.Exists());                // the held view finds nothing
+    }
+
+    TF_CASE("MSG_FIELD_NODE: node to node and node to field copy the value only")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Window> a(MsgFieldAnchor::Child(oRoot, L"a"));
+        MsgViewOf<Window> b(MsgFieldAnchor::Child(oRoot, L"b"));
+        a->x = 11;
+        a->x->something = L"a's child";
+        b->x = a->x;                               // node to node
+        TF_CHECK_EQ((int)b->x, 11);
+        TF_CHECK(!b->x->something.Exists());       // the children did not come along
+        b->y = a->x;                               // node to plain field
+        TF_CHECK_EQ((int)b->y, 11);
+        a->x = b->y;                               // plain field to node
+        TF_CHECK_EQ((int)a->x, 11);
+    }
+
+    TF_CASE("MSG_FIELD_NODE: a Bytes-coded view keeps its coding all the way down")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Settings> obj(oRoot, MsgFieldCoding::Bytes);
+        obj->window->x->something = L"b";
+        obj->window->x = 4;
+        TF_CHECK_EQ((int)Field(oRoot, L"window")[L"x"][L"something"].DataType(), VBLockData_BLOB16);
+        TF_CHECK_EQ((int)Field(oRoot, L"window")[L"x"].DataType(), VBLockData_BLOB16);
+        TF_CHECK(obj->window->x->something.Get() == L"b");
+        TF_CHECK_EQ((int)obj->window->x, 4);
+    }
+
+    TF_CASE("MSG_NODE: a nested view on a fresh P2PmsgMgr survives Save and reload")
+    {
+        wchar_t szDir[MAX_PATH]  = { 0 };
+        wchar_t szPath[MAX_PATH] = { 0 };
+        GetTempPathW(MAX_PATH, szDir);
+        swprintf_s(szPath, MAX_PATH, L"%smscs_nested_view.p2p", szDir);
+        try
+        {
+            {
+                P2PmsgMgr mgr;                     // the website's example, verbatim
+                mgr.r_name() = L"Settings";
+                MsgViewOf<Settings> obj(mgr);
+                obj->window = L"";
+                obj->window->x = 1240;
+                obj->window->x->something = "qu";
+                obj->window->y = 820;
+                mgr.Save(szPath);
+            }
+            {
+                P2PmsgMgr load(szPath);
+                MsgViewOf<Settings> obj(load);
+                int nX = obj->window->x;
+                TF_CHECK_EQ(nX, 1240);
+                TF_CHECK(obj->window->x->something.Get() == L"qu");
+                TF_CHECK_EQ((int)obj->window->y, 820);
+                TF_CHECK_EQ((int)P3PmsgField(load.RootPath2Object(L".Settings.window.x.something")).r_data().DataType(),
+                            (int)VBLockData_WSTR16);
+            }
+        }
+        catch (P2Pevent* pEVT)
+        {
+            tf_fail(__FILE__, __LINE__, "unexpected P2Pevent during nested-view persistence");
+            pEVT->Cancel(false);
+        }
+        _wremove(szPath);
+    }
+}
+
+// ---------------------------------------------------------------------------
 void RunMsgcoreSuite()
 {
     Test_FieldAccess_F0Facts();
@@ -2106,6 +2274,7 @@ void RunMsgcoreSuite()
     Test_FieldRef_ShortTime();
     Test_FieldRef_Attrs();
     Test_FieldView();
+    Test_FieldView_Nested();
     Test_Data_TypedValues();
     Test_Data_CopySemantics();
     Test_Time();
