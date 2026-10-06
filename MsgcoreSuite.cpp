@@ -2120,6 +2120,13 @@ struct L3 : MsgView { MSG_FIELD_NODE ( f3, long long, L4 ); };
 struct L2 : MsgView { MSG_FIELD_NODE ( f2, bool, L3 ); };
 struct L1 : MsgView { MSG_FIELD_NODE ( f1, double, L2 ); };
 
+// The website's example (ivyware.com.au/msgcore, "Typed view"), verbatim.
+struct SiteFont     : MsgView { MSG_FIELD ( size, int ); };
+struct SiteWindow   : MsgView { MSG_FIELD ( x, int );
+                                MSG_FIELD ( y, int );
+                                MSG_FIELD_NODE ( font, std::wstring, SiteFont ); };
+struct SiteSettings : MsgView { MSG_FIELD_NODE ( window, std::wstring, SiteWindow ); };
+
 static void Test_FieldView_Nested()
 {
     TF_CASE("MSG_FIELD_NODE: a field holds a value and children, reached by ->")
@@ -2237,22 +2244,26 @@ static void Test_FieldView_Nested()
             {
                 P2PmsgMgr mgr;                     // the website's example, verbatim
                 mgr.r_name() = L"Settings";
-                MsgViewOf<Settings> obj(mgr);
+                MsgViewOf<SiteSettings> obj(mgr);
                 obj->window = L"";
                 obj->window->x = 1240;
-                obj->window->x->something = "qu";
                 obj->window->y = 820;
+                obj->window->font = L"Consolas";
+                obj->window->font->size = 11;
                 mgr.Save(szPath);
             }
             {
                 P2PmsgMgr load(szPath);
-                MsgViewOf<Settings> obj(load);
-                int nX = obj->window->x;
+                MsgViewOf<SiteSettings> cfg(load);
+                int nX = cfg->window->x;
+                int pt = cfg->window->font->size;
                 TF_CHECK_EQ(nX, 1240);
-                TF_CHECK(obj->window->x->something.Get() == L"qu");
-                TF_CHECK_EQ((int)obj->window->y, 820);
-                TF_CHECK_EQ((int)P3PmsgField(load.RootPath2Object(L".Settings.window.x.something")).r_data().DataType(),
+                TF_CHECK_EQ(pt, 11);
+                TF_CHECK_EQ((int)cfg->window->y, 820);
+                TF_CHECK(cfg->window->font.Get() == L"Consolas");
+                TF_CHECK_EQ((int)P3PmsgField(load.RootPath2Object(L".Settings.window.font")).r_data().DataType(),
                             (int)VBLockData_WSTR16);
+                TF_CHECK_EQ(P3PmsgField(load.RootPath2Object(L".Settings.window.font.size")).c_int(), 11);
             }
         }
         catch (P2Pevent* pEVT)
