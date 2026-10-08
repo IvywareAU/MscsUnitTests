@@ -2276,6 +2276,58 @@ static void Test_FieldView_Nested()
 }
 
 // ---------------------------------------------------------------------------
+static void Test_ReceivedImageReserialises()
+{
+    //  A message rebuilt from a wire image, changed, and serialised again --
+    //  the shape of every reply built on a received message, and the one
+    //  Targetcore's ExceptionFactory takes for a declined broadcast. Before
+    //  Msgcore 3.2.1 (f2746e5) that tripped the overflow guard in
+    //  P2PmsgHeap_pIOmage: an ASSERT box that hung TargetFacade's
+    //  FacadeSmokeTest in Windows Debug, and an abort here on Linux
+    //  (MsgVBHeap.cpp:3999, measured 2026-10-08 with the fix disabled).
+    //
+    //  The cause was accounting. A fresh heap's image is its whole arena, free
+    //  tail included, and reconstruction counted every free byte as used, so
+    //  the first allocation into that space overran a uHiWM that had not moved.
+    //  Msgcore's own suite carries the same case (tests/MsgcoreSuite.cpp).
+    char    *pWire = nullptr;
+    VBLsize  nWire = 0;
+    {
+        P3PmsgBSTR oSent ( VBLock_Addr32, 2048 );
+        oSent.InitItem ( VBLockBSTR_MSG, P3PmsgData ( (int)7 ) );
+        oSent.PrepareP2Piomage ( ~(DWORD)0 );
+        nWire = oSent.P2PiomageSize ( );
+        pWire = new char [ nWire ];
+        memcpy ( pWire, oSent.P2Piomage ( ), nWire );
+        oSent.ReleaseP2Piomage ( );
+    }
+
+    TF_CASE("a received message that grows into its free space serialises again")
+    {
+        P3PmsgBSTR oRecv ( *(const VBListIOmage *)pWire, nWire );
+        TF_CHECK ( oRecv.Exists ( VBLockBSTR_MSG ) );
+
+        //  Allocates inside the received image -- the free tail the sender's
+        //  arena carried -- so uHiWM does not move.
+        oRecv.InitItem ( VBLockBSTR_EVT, P3PmsgData ( (int)9 ) );
+
+        oRecv.PrepareP2Piomage ( ~(DWORD)0 );
+        const VBLsize nAgain = oRecv.P2PiomageSize ( );
+        char *pAgain = new char [ nAgain ];
+        memcpy ( pAgain, oRecv.P2Piomage ( ), nAgain );
+        oRecv.ReleaseP2Piomage ( );
+
+        //  And the next hop reads both items back.
+        P3PmsgBSTR oNext ( *(const VBListIOmage *)pAgain, nAgain );
+        TF_CHECK ( oNext.Exists ( VBLockBSTR_MSG ) );
+        TF_CHECK ( oNext.Exists ( VBLockBSTR_EVT ) );
+        delete [] pAgain;
+    }
+
+    delete [] pWire;
+}
+
+// ---------------------------------------------------------------------------
 void RunMsgcoreSuite()
 {
     Test_FieldAccess_F0Facts();
@@ -2301,4 +2353,5 @@ void RunMsgcoreSuite()
     Test_VariantWideString();
     Test_IOmageEndianSentinel();
     Test_IOmageLayoutGeneration();
+    Test_ReceivedImageReserialises();
 }
