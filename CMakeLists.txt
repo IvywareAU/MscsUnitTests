@@ -96,7 +96,7 @@ set_tests_properties(unit_suite PROPERTIES TIMEOUT 60)
 # NOT WILL_FAIL. Inverting the exit code would pass on ANY compile error, a missing
 # include included; matching the sentence passes on exactly the refusal under test,
 # and a build that wrongly succeeds prints no sentence and fails.
-foreach(_cf control badtype longname)
+foreach(_cf control badtype longname attrtype)
     if(_cf STREQUAL "control")
         add_library(msgfield_cf_${_cf} OBJECT msgfield_cf.cpp)
     else()
@@ -117,6 +117,12 @@ set_tests_properties(msgfield_cf_badtype PROPERTIES TIMEOUT 300
     PASS_REGULAR_EXPRESSION "MSG_FIELD: this value's type is not the field's declared type")
 set_tests_properties(msgfield_cf_longname PROPERTIES TIMEOUT 300
     PASS_REGULAR_EXPRESSION "a Msgcore name holds at most 63 UTF-16 units")
+# F6: the same refusal through a member's attribute view (MSG_FIELD_ATTRS).
+add_test(NAME msgfield_cf_attrtype
+         COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}
+                 --target msgfield_cf_attrtype --config $<CONFIG>)
+set_tests_properties(msgfield_cf_attrtype PROPERTIES TIMEOUT 300
+    PASS_REGULAR_EXPRESSION "MSG_FIELD: this value's type is not the field's declared type")
 
 # msgcore_u8_smoke / p2p_u8_smoke: the UTF-8 (_u8) C-API round-trips (§6). Prove a UTF-8
 # string (1/2/3/4-byte incl. astral U+1F680) round-trips name+value byte-identically — the

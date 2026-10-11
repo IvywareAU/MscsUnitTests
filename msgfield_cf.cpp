@@ -14,7 +14,7 @@
 // permissions and limitations under the License.
 //
 // msgfield_cf.cpp -- the two things a MSG_FIELD view must REFUSE TO COMPILE
-// (MsgFieldAccessPlan.md, F2), and the control that proves the refusals are
+// (MsgFieldAccessPlan.md, F2; F6 adds the attribute view), and the control that proves the refusals are
 // about those two things and not about a header that does not build at all.
 //
 // One source, three targets (see CMakeLists.txt):
@@ -25,6 +25,9 @@
 //   msgfield_cf_badtype   MSGFIELD_CF_BADTYPE: `msg->uptime = L"x"`, text into
 //                         an int field.
 //   msgfield_cf_longname  MSGFIELD_CF_LONGNAME: a 64-character MSG_FIELD name.
+//   msgfield_cf_attrtype  MSGFIELD_CF_ATTRTYPE: text into an int ATTRIBUTE,
+//                         through MSG_FIELD_ATTRS's Attrs()-> (F6) -- the
+//                         attribute view's members are as typed as any.
 //
 // The two negatives are EXCLUDE_FROM_ALL and are compiled by their ctest
 // entries, which pass only when the build output contains the header's own
@@ -47,6 +50,16 @@ struct Telemetry : MsgView
 #endif
 };
 
+struct TelemetryAttrs : MsgView
+{
+    MSG_FIELD ( sensor, int );
+};
+
+struct Station : MsgView
+{
+    MSG_FIELD_ATTRS ( reading, double, TelemetryAttrs );
+};
+
 void MsgFieldCompileProbe ( P3PmsgItem& item )
 {
     MsgViewOf<Telemetry> msg ( item );
@@ -54,5 +67,12 @@ void MsgFieldCompileProbe ( P3PmsgItem& item )
     msg->uptime = 86400;
 #if defined(MSGFIELD_CF_BADTYPE)
     msg->uptime = L"x";
+#endif
+
+    MsgViewOf<Station> st ( item );
+    st->reading = 21.5;
+    st->reading.Attrs()->sensor = 7;
+#if defined(MSGFIELD_CF_ATTRTYPE)
+    st->reading.Attrs()->sensor = L"x";
 #endif
 }

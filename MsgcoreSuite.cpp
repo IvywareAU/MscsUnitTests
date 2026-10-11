@@ -1423,6 +1423,30 @@ struct Limits : MsgView
     MSG_FIELD ( high, int );
 };
 
+// F6: the website's Attributes example (ivyware.com.au/msgcore), as views.
+struct F6UnitParts : MsgView
+{
+    MSG_FIELD ( Symbol, std::wstring );
+    MSG_FIELD ( SI,     std::wstring );
+    MSG_FIELD ( Offset, double );
+};
+struct F6TempAttrs : MsgView
+{
+    MSG_FIELD_NODE ( Unit, std::wstring, F6UnitParts );
+    MSG_FIELD ( Sensor, int );
+};
+struct F6TempDesc : MsgView
+{
+    MSG_FIELD ( Reading, double );
+};
+struct F6Store : MsgView
+{
+    MSG_FIELD_NODE_ATTRS ( Temperature, double, F6TempDesc, F6TempAttrs );
+    MSG_FIELD_ATTRS      ( Price, double, Money );
+    MSG_NODE_ATTRS       ( Probe, F6TempDesc, F6TempAttrs );
+    MSG_FIELD            ( Plain, double );
+};
+
 // Records what an anchor's hooks were told, for the Child() cases.
 struct HookLog
 {
@@ -2006,6 +2030,164 @@ static void Test_FieldRef_Attrs()
     }
 }
 
+// ---------------------------------------------------------------------------
+// F6 (MsgFieldAccessPlan.md): attributes in the two forms.
+//   dynamic  Field(x, L"t")[L"Unit"_attr]   -- the _attr literal, MsgLiterals
+//   static   s->Temperature.Attrs()->Unit   -- the MSG_*_ATTRS members
+// Each case checks against the long-hand r_Attr() calls, so "the proxy agrees
+// with itself" is never the only evidence.
+// ---------------------------------------------------------------------------
+static void Test_FieldRef_AttrsF6()
+{
+    using namespace MsgLiterals;
+
+    TF_CASE("_attr: [L\"x\"_attr] is .Attr(L\"x\"), and [L\"x\"] stays a descendant")
+    {
+        P3PmsgField oRoot(L"Store");
+        Field(oRoot, L"Temperature") = 21.5;
+        Field(oRoot, L"Temperature")[L"Unit"_attr] = L"Celsius";
+        Field(oRoot, L"Temperature")[L"Sensor"_attr] = 7;
+        Field(oRoot, L"Temperature")[L"Reading"] = 21.5;
+
+        P3PmsgItem& t = oRoot.SelectItem(L"Temperature");
+        TF_CHECK_EQ((int)t.r_Attr().GetCount(), 2);
+        TF_CHECK(wcscmp(t.r_Attr().SelectItem(L"Unit").c_wstr(), L"Celsius") == 0);
+        TF_CHECK_EQ(oRoot.SelectItem(L"Temperature").r_Attr().SelectItem(L"Sensor").c_int(), 7);
+        TF_CHECK(oRoot.SelectItem(L"Temperature").Exists(L"Reading"));
+        TF_CHECK(!oRoot.SelectItem(L"Temperature").Exists(L"Unit"));          // not a descendant
+        TF_CHECK(!oRoot.SelectItem(L"Temperature").r_Attr().Exists(L"Reading")); // not an attribute
+        TF_CHECK(Field(oRoot, L"Temperature").Attr(L"Unit").AsText() == L"Celsius");
+        TF_CHECK(Field(oRoot, L"Temperature").AsReal() == 21.5);
+    }
+
+    TF_CASE("_attr: an attribute's own children, the miss, Erase and the run-time name")
+    {
+        P3PmsgField oRoot(L"Store");
+        Field(oRoot, L"Temperature")[L"Unit"_attr]            = L"Celsius";
+        Field(oRoot, L"Temperature")[L"Unit"_attr][L"SI"]     = L"kelvin";
+        Field(oRoot, L"Temperature")[L"Unit"_attr][L"Offset"] = 273.15;
+        TF_CHECK(oRoot.SelectItem(L"Temperature").r_Attr().SelectItem(L"Unit").SelectItem(L"Offset").c_double() == 273.15);
+        TF_CHECK(Field(oRoot, L"Temperature")[L"Unit"_attr][L"SI"].AsText() == L"kelvin");
+
+        TF_CHECK(!Field(oRoot, L"Temperature")[L"Nobody"_attr].Exists());
+        TF_CHECK(ThrowsP2Pevent([&]{ (void)Field(oRoot, L"Temperature")[L"Nobody"_attr].AsText(); }));
+        TF_CHECK(!oRoot.SelectItem(L"Temperature").r_Attr().Exists(L"Nobody"));  // the read made nothing
+
+        std::wstring name = L"Sensor";                          // chosen at run time
+        Field(oRoot, L"Temperature")[MsgAttrName(name.c_str())] = 9;
+        TF_CHECK_EQ(Field(oRoot, L"Temperature")[L"Sensor"_attr].AsInt(), 9);
+        TF_CHECK(Field(oRoot, L"Temperature")[L"Sensor"_attr].Erase());
+        TF_CHECK(!oRoot.SelectItem(L"Temperature").r_Attr().Exists(L"Sensor"));
+
+        std::wstring n64(64, L'n');
+        TF_CHECK(ThrowsP2Pevent([&]{ Field(oRoot, L"Fresh")[MsgAttrName(n64.c_str())] = 1; }));
+        TF_CHECK(!oRoot.Exists(L"Fresh"));                      // refused before anything was made
+    }
+
+    TF_CASE("_attr: Field(item, L\"x\"_attr) is an attribute of the item itself")
+    {
+        P3PmsgField temp(L"Temperature", P3PmsgData((double)21.5));
+        TF_CHECK(!temp.IsAttributed());
+        TF_CHECK(!Field(temp, L"Unit"_attr).Exists());
+        TF_CHECK(!temp.IsAttributed());                         // a read creates no set
+        Field(temp, L"Unit"_attr)   = L"Celsius";
+        Field(temp, L"Sensor"_attr) = 7;
+        TF_CHECK(temp.IsAttributed());
+        TF_CHECK_EQ((int)temp.r_Attr().GetCount(), 2);
+        TF_CHECK(wcscmp(temp.r_Attr().SelectItem(L"Unit").c_wstr(), L"Celsius") == 0);
+        TF_CHECK(temp.c_double() == 21.5);                      // the value untouched
+
+        MsgFieldAnchor a = MsgFieldAnchor::Child(temp, L"Reading");
+        Field(a, L"Note"_attr) = L"via anchor";
+        TF_CHECK(wcscmp(temp.SelectItem(L"Reading").r_Attr().SelectItem(L"Note").c_wstr(), L"via anchor") == 0);
+    }
+
+    TF_CASE("_attr on views: msg[..], msg->f[..], node[..] all reach attributes")
+    {
+        P3PmsgField oRoot(L"Root");
+        MsgViewOf<Priced> msg(oRoot);
+        msg->total = 99.0;
+        msg->total[L"currency"_attr] = L"EUR";
+        msg[L"schema"_attr] = L"v1";
+        TF_CHECK(Field(oRoot, L"total").Attr(L"currency").AsText() == L"EUR");
+        TF_CHECK(wcscmp(oRoot.r_Attr().SelectItem(L"schema").c_wstr(), L"v1") == 0);
+
+        P3PmsgField oStore(L"Store");
+        MsgViewOf<F6Store> s(oStore);
+        s->Temperature[L"note"_attr] = L"n";                  // MSG_FIELD_NODE_ATTRS: MsgTypedNode's [] un-hidden
+        s->Probe[L"tag"_attr] = 1;                            // MSG_NODE_ATTRS: MsgNode's []
+        s->Temperature.Attrs()->Unit[L"lang"_attr] = L"en";   // plain MSG_FIELD_NODE
+        (*s)[L"rev"_attr] = 3;                                // MsgView itself
+        TF_CHECK(Field(oStore, L"Temperature").Attr(L"note").AsText() == L"n");
+        TF_CHECK_EQ(oStore.SelectItem(L"Probe").r_Attr().SelectItem(L"tag").c_int(), 1);
+        TF_CHECK(Field(oStore, L"Temperature").Attr(L"Unit").Attr(L"lang").AsText() == L"en");
+        TF_CHECK_EQ(oStore.r_Attr().SelectItem(L"rev").c_int(), 3);
+        TF_CHECK(!Field(oStore, L"Temperature")[L"note"].Exists());     // not a child
+    }
+
+    TF_CASE("MSG_FIELD_NODE_ATTRS: value, -> children and .Attrs()-> attributes, three trees apart")
+    {
+        P3PmsgField oRoot(L"Store");
+        MsgViewOf<F6Store> s(oRoot);
+        s->Temperature = 21.5;
+        s->Temperature->Reading = 21.5;
+        s->Temperature.Attrs()->Unit   = L"Celsius";
+        s->Temperature.Attrs()->Sensor = 7;
+        s->Temperature.Attrs()->Unit->Symbol = L"°C";
+        s->Temperature.Attrs()->Unit->SI     = L"kelvin";
+        s->Temperature.Attrs()->Unit->Offset = 273.15;
+
+        P3PmsgItem& t = oRoot.SelectItem(L"Temperature");
+        TF_CHECK(t.c_double() == 21.5);
+        TF_CHECK_EQ((int)t.r_Desc().GetCount(), 1);
+        TF_CHECK_EQ((int)oRoot.SelectItem(L"Temperature").r_Attr().GetCount(), 2);
+        TF_CHECK(wcscmp(oRoot.SelectItem(L"Temperature").r_Attr().SelectItem(L"Unit").c_wstr(), L"Celsius") == 0);
+        TF_CHECK(wcscmp(oRoot.SelectItem(L"Temperature").r_Attr().SelectItem(L"Unit").SelectItem(L"Symbol").c_wstr(), L"°C") == 0);
+
+        double dt = s->Temperature;
+        int    sn = s->Temperature.Attrs()->Sensor;
+        std::wstring u = s->Temperature.Attrs()->Unit;
+        TF_CHECK(dt == 21.5);
+        TF_CHECK_EQ(sn, 7);
+        TF_CHECK(u == L"Celsius");
+        TF_CHECK(s->Temperature.Attrs()->Unit->Offset.Get() == 273.15);
+        // The dynamic and static forms name the same cells.
+        TF_CHECK(Field(oRoot, L"Temperature")[L"Unit"_attr][L"SI"].AsText() == L"kelvin");
+
+        s->Temperature.Attrs()->Sensor = 9;
+        TF_CHECK_EQ(oRoot.SelectItem(L"Temperature").r_Attr().SelectItem(L"Sensor").c_int(), 9);
+        TF_CHECK(s->Temperature.Attrs()->Sensor.Erase());
+        TF_CHECK(!s->Temperature.Attrs()->Sensor.Exists());
+        TF_CHECK(s->Temperature.Attrs()->Unit.Exists());
+    }
+
+    TF_CASE("MSG_FIELD_ATTRS / MSG_NODE_ATTRS: a read creates nothing, a write creates the member and its set")
+    {
+        P3PmsgField oRoot(L"Store");
+        MsgViewOf<F6Store> s(oRoot);
+        TF_CHECK(!s->Price.Attrs()->currency.Exists());
+        TF_CHECK(ThrowsP2Pevent([&]{ std::wstring c = s->Price.Attrs()->currency; (void)c; }));
+        TF_CHECK(!oRoot.Exists(L"Price"));
+
+        s->Price.Attrs()->currency = L"AUD";                   // no Price yet
+        TF_CHECK(oRoot.Exists(L"Price"));
+        TF_CHECK(wcscmp(oRoot.SelectItem(L"Price").r_Attr().SelectItem(L"currency").c_wstr(), L"AUD") == 0);
+        s->Price = 12.5;
+        TF_CHECK(s->Price.Get() == 12.5);
+        TF_CHECK(s->Price.Attrs()->currency.Get() == L"AUD");  // the value write left the set alone
+
+        s->Probe->Reading = 1.0;
+        s->Probe.Attrs()->Sensor = 4;
+        TF_CHECK_EQ(oRoot.SelectItem(L"Probe").r_Attr().SelectItem(L"Sensor").c_int(), 4);
+        TF_CHECK(oRoot.SelectItem(L"Probe").SelectItem(L"Reading").c_double() == 1.0);
+
+        // Field-to-field copies the VALUE only, attributes stay where they were.
+        s->Plain = s->Price;
+        TF_CHECK(s->Plain.Get() == 12.5);
+        TF_CHECK(!oRoot.SelectItem(L"Plain").IsAttributed());
+    }
+}
+
 static void Test_FieldView()
 {
     TF_CASE("MSG_FIELD view: msg->field = value, and reads by conversion")
@@ -2336,6 +2518,7 @@ void RunMsgcoreSuite()
     Test_FieldRef_Paths();
     Test_FieldRef_ShortTime();
     Test_FieldRef_Attrs();
+    Test_FieldRef_AttrsF6();
     Test_FieldView();
     Test_FieldView_Nested();
     Test_Data_TypedValues();
