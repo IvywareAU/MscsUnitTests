@@ -470,6 +470,92 @@ static void Test_AddrNameAccessors()
 }
 
 // ---------------------------------------------------------------------------
+// P2Paddr — the VNet qualifier (p2p_PeerLan_L7b.md §7, rules R1 and R2)
+//
+// [VNet:]addr. V:x is x inside the network mounted at the hub V, so ':' is a hop
+// boundary exactly as '.' is: V:x is below V. Until 2026-10-14 the grammar was
+// documented and nothing implemented it - a colon was an ordinary character,
+// V:x matched nothing above it, GetVNet() had no body, and the two fields meant
+// to hold the parse were never set and were dropped by every copy.
+// ---------------------------------------------------------------------------
+static void Test_AddrVNet()
+{
+    TF_CASE("':' is a hop boundary: V:x is routable through V and a child of it")
+    {
+        const P2Paddr oV(L"Lan.A.Plant");
+        TF_CHECK(oV.IsRable(L"Lan.A.Plant:Root.Svc"));
+        TF_CHECK(oV.IsChild(L"Lan.A.Plant:Root"));
+        TF_CHECK(P2Paddr(L"Lan.A").IsRable(L"Lan.A.Plant:Root.Svc"));
+        TF_CHECK(P2Paddr(L"Lan").IsChild(L"Lan.A.Plant:Root.Svc"));
+        TF_CHECK(P2Paddr(L"Lan.A.Plant:Root").IsRable(L"Lan.A.Plant:Root.Svc"));
+        TF_CHECK(P2Paddr(L"Lan.A.Plant:Root").IsChild(L"Lan.A.Plant:Root.Svc"));
+        TF_CHECK(P2Paddr(L"Root").IsRable(L"Root:Lan.B.Talk"));
+    }
+
+    TF_CASE("the boundary still has to fall on a hop: V:x is not below VX or V.Y")
+    {
+        TF_CHECK(!P2Paddr(L"Lan.A.Pla").IsRable(L"Lan.A.Plant:Root"));
+        TF_CHECK(!P2Paddr(L"Lan.A.Plant.Other").IsRable(L"Lan.A.Plant:Root"));
+        TF_CHECK(!P2Paddr(L"Lan.A.Plant:Root.Svc").IsRable(L"Lan.A.Plant:Root"));
+        TF_CHECK(!P2Paddr(L"Lan.A.Plant:Root").IsChild(L"Lan.A.Plant:Root"));
+        // The mounted network is not the same place as a hub of the same name
+        TF_CHECK(!P2Paddr(L"Lan.A.Plant:Root").IsRable(L"Lan.A.Plant.Root"));
+        TF_CHECK(!P2Paddr(L"Lan.A.Plant.Root").IsRable(L"Lan.A.Plant:Root"));
+    }
+
+    TF_CASE("an address without a colon routes exactly as before")
+    {
+        TF_CHECK(P2Paddr(L"CEX.SDrvs").IsRable(L"CEX.SDrvs.AAD"));
+        TF_CHECK(P2Paddr(L"CEX").IsRable(L"CEX.XDrvs"));
+        TF_CHECK(!P2Paddr(L"CEX.SDrvs").IsRable(L"CEX.XDrvs"));
+        TF_CHECK(P2Paddr(L"CEX").IsRable(L"CEX"));
+        TF_CHECK(!P2Paddr(L"CEX.SDrvs").IsRable(L"CEX"));
+        TF_CHECK(!P2Paddr(L"CEX.SDrvs").IsRable(L"CEX.SDrvsX"));
+        TF_CHECK(!P2Paddr(L"CEX").IsChild(L"CEX"));
+        TF_CHECK(!P2Paddr(L"CEX").IsChild(L"CEXTRA"));
+    }
+
+    TF_CASE("GetVNet / GetVNetAddr split on the FIRST colon, as the Java wire does")
+    {
+        const P2Paddr oQ(L"Lan.A.Plant:Root.Svc");
+        TF_CHECK(oQ.HasVNet());
+        TF_CHECK(wcscmp(oQ.GetVNet(), L"Lan.A.Plant") == 0);
+        TF_CHECK(wcscmp(oQ.GetVNetAddr(), L"Root.Svc") == 0);
+
+        const P2Paddr oN(L"Outer:Inner:Root.Svc");          // nested mounts
+        TF_CHECK(wcscmp(oN.GetVNet(), L"Outer") == 0);
+        TF_CHECK(wcscmp(oN.GetVNetAddr(), L"Inner:Root.Svc") == 0);
+
+        const P2Paddr oP(L"Root.Svc");                      // no qualifier
+        TF_CHECK(!oP.HasVNet());
+        TF_CHECK(wcscmp(oP.GetVNet(), L"") == 0);
+        TF_CHECK(wcscmp(oP.GetVNetAddr(), L"Root.Svc") == 0);
+
+        TF_CHECK(wcscmp(P2Paddr(L"V:").GetVNetAddr(), L"") == 0);
+        TF_CHECK(wcscmp(P2Paddr(L":x").GetVNet(), L"") == 0);
+    }
+
+    TF_CASE("the qualifier survives copy and assignment (it is the string, not a field)")
+    {
+        const P2Paddr oQ(L"Lan.A.Plant:Root.Svc");
+        P2Paddr oCopy(oQ);
+        P2Paddr oAssigned;
+        oAssigned = oQ;
+        P2Paddr oFromStr;
+        oFromStr = L"Lan.A.Plant:Root.Svc";
+        TF_CHECK(wcscmp(oCopy.GetVNet(), L"Lan.A.Plant") == 0);
+        TF_CHECK(wcscmp(oAssigned.GetVNet(), L"Lan.A.Plant") == 0);
+        TF_CHECK(wcscmp(oFromStr.GetVNetAddr(), L"Root.Svc") == 0);
+        TF_CHECK(oCopy == oQ);
+    }
+
+    TF_CASE("c_name() of a qualified address is its last hop")
+    {
+        TF_CHECK(wcscmp(P2Paddr(L"Lan.A.Plant:Root.Svc").c_name(), L"Svc") == 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // In-memory two-hub delivery
 // ---------------------------------------------------------------------------
 namespace {
@@ -1823,6 +1909,7 @@ void RunTargetcoreSuite()
     Test_MessageValuePlumbing();
     Test_AppFields();
     Test_AddrNameAccessors();
+    Test_AddrVNet();
     Test_InMemoryTwoHubDelivery();
     Test_UndeliverableCascade();
     Test_UndeliverableReportBounded();
