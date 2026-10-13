@@ -1701,6 +1701,38 @@ add_test(NAME p2p_authchannel COMMAND p2p_authchannel 7836)
 set_tests_properties(p2p_authchannel PROPERTIES
     TIMEOUT 180 RESOURCE_LOCK loopback_7836 LABELS security)
 
+# p2p_restartkeyx: does a connection Targetcore RESTARTS by itself agree keys
+# again? Finding F-L7-2 (P2PeerLan, 2026-10-14). P2PeerCon::Restart reuses the
+# connection object, and its agreement state (m_bKeyXDone, the ECDH pair, the
+# binding, the auth nonce) was set once and never cleared, while the cypher
+# went with the socket. A restarted client therefore logged in with no
+# agreement and an auth-on server refused it every m_uAutoRestart ms, forever.
+# One client, two server hubs in turn on one port; the second must accept the
+# client's own restart. RED before Restart() cleared the state.
+#   STATUS: PASSES        (measured 2026-10-14, Windows Debug)
+add_executable(p2p_restartkeyx p2p_restartkeyx.cpp)
+_mscs_test_common(p2p_restartkeyx)
+target_link_libraries(p2p_restartkeyx PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_restartkeyx COMMAND p2p_restartkeyx 7837)
+set_tests_properties(p2p_restartkeyx PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK loopback_7837 LABELS security)
+
+# p2p_vnetmount: the VNet qualifier end to end (p2p_PeerLan_L7b.md §7). V:x is
+# x inside the network MOUNTED at hub V; ':' is a hop boundary; a mount is a
+# connection that rewrites addresses as messages cross it and is a gateway -
+# it opens what was sealed into its network, drops the origin's attestation,
+# and the far side's next hop seals and attests afresh. Two networks in one
+# process over DMX, auth + seal + relay auth on everywhere, deep enough that
+# the relay gate fires on both sides of the mount: a round trip both ways with
+# the addresses each side must see, a VNet nobody mounted, and no link closed.
+# No sockets, so no port and no RESOURCE_LOCK.
+#   STATUS: PASSES        (measured 2026-10-14, Windows Debug)
+add_executable(p2p_vnetmount p2p_vnetmount.cpp)
+_mscs_test_common(p2p_vnetmount)
+target_link_libraries(p2p_vnetmount PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_vnetmount COMMAND p2p_vnetmount)
+set_tests_properties(p2p_vnetmount PROPERTIES TIMEOUT 120 LABELS security)
+
 # p2p_gcmdirection: the session cypher holds TWO keys, one per direction, so the
 # key a peer seals with is never the key it opens with, and sealing REFUSES once
 # a key has been used its budget of times
