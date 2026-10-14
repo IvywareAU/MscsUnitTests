@@ -1733,6 +1733,19 @@ target_link_libraries(p2p_vnetmount PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_vnetmount COMMAND p2p_vnetmount)
 set_tests_properties(p2p_vnetmount PROPERTIES TIMEOUT 120 LABELS security)
 
+# p2p_hubdtorreport: ~P2PeerHub REPORTS a hub destroyed with its spawned pump
+# still running (F-TSAN-2) - and must not abort while doing it. Until Targetcore
+# 3.4.1 the report was one P2Pevent::Message() of ~320 characters, and Msgcore
+# VERIFYs each line is under 255, so in Debug the report itself aborted the
+# process (exit code 3) - found in _OldExamples\AKAssms at shutdown. A plain
+# hub, spawned, deleted without CloseHub(); a CRT report hook counts assertions.
+# RED (1) on 3.4.0 in Debug. No sockets, so no port and no RESOURCE_LOCK.
+add_executable(p2p_hubdtorreport p2p_hubdtorreport.cpp)
+_mscs_test_common(p2p_hubdtorreport)
+target_link_libraries(p2p_hubdtorreport PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_hubdtorreport COMMAND p2p_hubdtorreport)
+set_tests_properties(p2p_hubdtorreport PROPERTIES TIMEOUT 60)
+
 # p2p_gcmdirection: the session cypher holds TWO keys, one per direction, so the
 # key a peer seals with is never the key it opens with, and sealing REFUSES once
 # a key has been used its budget of times
