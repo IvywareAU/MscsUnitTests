@@ -186,8 +186,16 @@ protected:
             const UINT  cbImage = pMsg->P2PiomageSize ( );
 
             const bool bPlain = Contains ( pvImage, cbImage, kNeedle, std::strlen ( kNeedle ) );
-            const size_t cbAddr = std::wcslen ( kCarolAddr ) * sizeof(wchar_t);
-            const bool bAddr  = Contains ( pvImage, cbImage, kCarolAddr, cbAddr );
+            //  The wire carries addresses as UTF-16 on every platform, and
+            //  wchar_t is four bytes on Linux - so the needle is built as
+            //  16-bit units, not taken from the wide literal's own bytes
+            //  (which found nothing there: the first CI run said
+            //  INCONCLUSIVE on Linux with the fix plainly working)
+            std::vector<uint16_t> vAddr;
+            for ( const wchar_t *p = kCarolAddr; *p; ++p )
+                vAddr.push_back ( (uint16_t)*p );
+            const bool bAddr  = Contains ( pvImage, cbImage, &vAddr[0],
+                                           vAddr.size ( ) * sizeof(uint16_t) );
             pMsg->ReleaseP2Piomage ( );
 
             if ( bSealed ) g_bMidSawSealed  = true;
