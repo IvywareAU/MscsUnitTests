@@ -1732,6 +1732,25 @@ add_test(NAME p2p_acceptunnamed COMMAND p2p_acceptunnamed 7812)
 set_tests_properties(p2p_acceptunnamed PROPERTIES
     TIMEOUT 60 RESOURCE_LOCK loopback_7812 LABELS security)
 
+# p2p_sealwire: does a SEALED message carry its plaintext on the wire? F-L4-1
+# (P2PeerLan, 2026-10-12): SealAppMsgOutbound swapped the sealed body in with
+# SetData, the old block stayed in the message heap unzeroed, and the send path
+# puts the whole heap in the frame - so a relay with no keys read the plaintext
+# beside its ciphertext, every sealed frame was ~2x its body, and a body over
+# ~15 KB broke the 32768-byte cap and dropped the link. p2p_sealhop could not
+# see it: it reads Data(), which IS the ciphertext. Alice -> keyless middle ->
+# Carol with the AUTOMATIC seal; the middle scans the whole received frame.
+# Controls: Carol gets the plaintext back, the middle saw it sealed, the scanner
+# finds Carol's address in the frame. Then: no plaintext in the frame, frame
+# ~one body, and a 20 KB body arrives. RED before Targetcore 3.4.4.
+#   STATUS: PASSES        (measured 2026-10-16, Windows Debug)
+add_executable(p2p_sealwire p2p_sealwire.cpp)
+_mscs_test_common(p2p_sealwire)
+target_link_libraries(p2p_sealwire PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_sealwire COMMAND p2p_sealwire 7817)
+set_tests_properties(p2p_sealwire PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK loopback_7817 LABELS security)
+
 # p2p_vnetmount: the VNet qualifier end to end (p2p_PeerLan_L7b.md §7). V:x is
 # x inside the network MOUNTED at hub V; ':' is a hop boundary; a mount is a
 # connection that rewrites addresses as messages cross it and is a gateway -
