@@ -166,8 +166,9 @@ Conventions across them:
   | 7835 | `p2p_backpressure` | | 7858 | `p2p_linktrust` |
   | 7836 | `p2p_authchannel`  | | | |
 
-  (7812 went to `p2p_acceptunnamed` on 2026-10-16, after this table was derived.)
-  **Free in range: 7817, 7822, 7825, 7829, 7831, 7832, 7837, 7839, 7841, 7843**, then
+  (7812 went to `p2p_acceptunnamed` and 7817 to `p2p_sealwire` on 2026-10-16, after this
+  table was derived.)
+  **Free in range: 7822, 7825, 7829, 7831, 7832, 7837, 7839, 7841, 7843**, then
   7859 up. Take one of those for anything new. Do **not** infer a free port from the end of
   this table — that is precisely how the old list misled, since it stopped at 7824 while
   7826–7858 were already taken. Re-derive with
