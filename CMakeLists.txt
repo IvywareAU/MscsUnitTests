@@ -1717,6 +1717,21 @@ add_test(NAME p2p_restartkeyx COMMAND p2p_restartkeyx 7837)
 set_tests_properties(p2p_restartkeyx PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7837 LABELS security)
 
+# p2p_acceptunnamed: does a listener with ConState_AcceptUnnamed (Targetcore
+# 3.4.3) give its accepted children an EMPTY peer address before they are
+# published? AcceptSpawn copies the listener's address into each child and
+# OnAccept(addr) refuses to replace one already set, so _OldExamples\AKAserva
+# (browsers named Webserver.<n> after accept) cleared it in its own override,
+# after publication and outside ThatAddrLock. Phase 1 is the positive control
+# (no bit: the child carries the listener's address); phase 2 sets the bit.
+#   STATUS: PASSES        (measured 2026-10-16, Windows Debug)
+add_executable(p2p_acceptunnamed p2p_acceptunnamed.cpp)
+_mscs_test_common(p2p_acceptunnamed)
+target_link_libraries(p2p_acceptunnamed PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_acceptunnamed COMMAND p2p_acceptunnamed 7812)
+set_tests_properties(p2p_acceptunnamed PROPERTIES
+    TIMEOUT 60 RESOURCE_LOCK loopback_7812 LABELS security)
+
 # p2p_vnetmount: the VNet qualifier end to end (p2p_PeerLan_L7b.md §7). V:x is
 # x inside the network MOUNTED at hub V; ':' is a hop boundary; a mount is a
 # connection that rewrites addresses as messages cross it and is a gateway -
