@@ -2463,7 +2463,7 @@ static void Test_ReceivedImageReserialises()
     //  A message rebuilt from a wire image, changed, and serialised again --
     //  the shape of every reply built on a received message, and the one
     //  Targetcore's ExceptionFactory takes for a declined broadcast. Before
-    //  Msgcore 3.2.1 (f2746e5) that tripped the overflow guard in
+    //  Msgcore 3.2.1 (741f541) that tripped the overflow guard in
     //  P2PmsgHeap_pIOmage: an ASSERT box that hung TargetFacade's
     //  FacadeSmokeTest in Windows Debug, and an abort here on Linux
     //  (MsgVBHeap.cpp:3999, measured 2026-10-08 with the fix disabled).
