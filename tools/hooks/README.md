@@ -15,6 +15,19 @@ that could run code on clone would be a supply-chain hole, not a feature.
 
 To uninstall: `git config --unset core.hooksPath`.
 
+## `commit-msg`
+
+Strips AI-tool attribution from every commit message: a `Co-authored-by` trailer naming
+Claude or an `anthropic.com` address, a `Claude-Session` trailer, and the
+"Generated with [Claude Code]" footer. Any other line, a human `Co-authored-by`
+included, is kept as written. It prints a note on stderr when it removes something.
+
+GitHub counts a co-author as a contributor, so one trailer that gets through leaves Claude
+on the repository's contributors list until history is rewritten. Claude Code's own
+`attribution` setting turns the trailer off for one install; this hook covers every commit
+made in a clone that installed it, whichever tool wrote the message. It does not change
+commits that already exist, and `git commit --no-verify` skips it.
+
 ## `pre-push`
 
 Keeps three things off `master`: deletion, non-fast-forward pushes, and any commit whose

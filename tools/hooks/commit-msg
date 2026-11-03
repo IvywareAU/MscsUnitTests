@@ -1,0 +1,62 @@
+#!/bin/sh
+# Copyright © 2026 Khrustal & Mann
+#              MELBOURNE, VICTORIA, AUSTRALIA, 3000
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied. See the License for the specific language governing
+# permissions and limitations under the License.
+#
+#  commit-msg -- strip AI-tool attribution from a commit message.
+#
+#  Removes, case-insensitively, any line that is
+#    * a Co-authored-by trailer naming Claude or an anthropic.com address,
+#    * a Claude-Session trailer,
+#    * the "Generated with [Claude Code]" footer,
+#  then drops the blank lines that leaves at the end. Every other line --
+#  a human Co-authored-by included -- is kept byte for byte.
+#
+#  Why a hook and not only the tool's own setting: the setting covers one
+#  install of one tool. This covers every commit made in a clone that has
+#  installed it (see README.md here), whichever tool wrote the message.
+#  GitHub lists a co-author as a contributor, so a trailer that slips through
+#  once stays on the contributors list until history is rewritten.
+#
+#  It does not touch commits that already exist, and like every hook here it
+#  is skipped by `git commit --no-verify`.
+
+msg="$1"
+[ -n "$msg" ] && [ -f "$msg" ] || exit 0
+
+tmp="$msg.strip.$$"
+trap 'rm -f "$tmp"' EXIT
+
+awk '
+{
+  line = $0
+  sub(/\r$/, "", line)
+  low = tolower(line)
+  if (low ~ /^[ \t]*co-authored-by:/ && low ~ /(claude|anthropic\.com)/) next
+  if (low ~ /^[ \t]*claude-session:/) next
+  if (low ~ /generated with \[?claude code\]?/) next
+  out[++n] = $0
+}
+END {
+  # trim trailing blank lines (a lone CR counts as blank)
+  while (n > 0) { t = out[n]; sub(/\r$/, "", t); if (t ~ /^[ \t]*$/) n--; else break }
+  for (i = 1; i <= n; i++) print out[i]
+}
+' "$msg" > "$tmp" || exit 0
+
+if ! cmp -s "$msg" "$tmp"; then
+  cat "$tmp" > "$msg"
+  echo "commit-msg: removed Claude attribution from the commit message" >&2
+fi
+exit 0
