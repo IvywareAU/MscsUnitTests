@@ -63,6 +63,29 @@
 //                        No library counter exists and P0 changes no library
 //                        code, so this is the honest place to read it.
 //
+// B7 cross-host (p2p_performance.md §3.1, 2026-11-19): two processes, usually on
+// two machines. Unset PERF_ROLE is the single-process run above, unchanged.
+//   PERF_ROLE=server     one hub that listens on PERF_PORT (default 7802, every
+//                        interface) and ECHOES each BCast back to its sender.
+//                        It serves client after client and exits once nothing
+//                        has arrived for PERF_SERVE_IDLE seconds (default 300).
+//                        K/N/payload are ignored: the client chooses them.
+//   PERF_ROLE=client     one hub that dials PERF_PEER (default 127.0.0.1) and
+//                        runs warmup + L + T as above, but counts the ECHOES.
+//                        So Phase L is a ROUND TRIP (no shared clock between
+//                        two hosts makes one-way honest) and Phase T is
+//                        pipelined round trips: N out, N back. The metric is
+//                        latency_rtt, not latency_oneway, and the frame bytes
+//                        are read off the echo, i.e. the server's encoding.
+//                        The control for a LAN row is the same two roles as
+//                        two processes on one host; their difference is the
+//                        network.
+//   PERF_KEYDIR=dir      postures B..E across hosts: both processes need the
+//                        same six key files. Generated into dir if absent
+//                        (IdProtect_None so a Windows file loads on Linux and
+//                        back), reused if present, never deleted. Copy the
+//                        directory to the other host before starting it.
+//
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat perf_ab.cpp \
@@ -92,6 +115,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <memory>
 
 // P0 suite (p2p_performance.md §3): the shared Stats / PERFJSON / CPU-time
 // helpers. Only the reporting is shared; this file keeps its own clock and
@@ -111,7 +135,7 @@ static std::string N(const wchar_t* w)
 }
 
 // -------------------------------------------------------------------------
-static const short      kTestPort   = 7802;
+static short            kTestPort   = 7802;   // PERF_PORT overrides (B7)
 static const P2PaddrSTR kServerAddr = L"PerfAB.Server";
 static const P2PaddrSTR kClientAddr = L"PerfAB.Client";
 
@@ -154,6 +178,13 @@ static const char* TrName() { return g_eTr == TrDmx ? "dmx" : g_eTr == TrPipe ? 
 static LPCTSTR     kDmxSvc  = _T("PerfAB.Dmx");
 static LPCTSTR     kPipeName = _T("\\\\.\\pipe\\PerfAB");
 
+// --- role (PERF_ROLE, B7) --------------------------------------------------
+enum Role { RoleBoth, RoleServer, RoleClient };
+static Role        g_eRole = RoleBoth;
+static std::string g_sPeer = "127.0.0.1";
+static std::string g_sKeyDir;                        // PERF_KEYDIR, empty = temp files
+static const char* RoleName() { return g_eRole == RoleServer ? "server" : g_eRole == RoleClient ? "client" : "both"; }
+
 // --- what the client's link actually did, read at its login ack -----------
 // Without this a posture row is unfalsifiable: "B costs nothing over A" and
 // "B never took" print the same numbers (p2p_linkcost's argument).
@@ -183,8 +214,41 @@ static std::string TempPath(const char* leaf)
 }
 static void ScrubTemp() { for (auto& s : g_vTemp) DeleteFileA(s.c_str()); g_vTemp.clear(); }
 
+static bool FileExists(const std::string& p)
+{ FILE* f = std::fopen(p.c_str(), "rb"); if (f) std::fclose(f); return f != nullptr; }
+
+// PERF_KEYDIR (B7): six files in one directory both hosts share by copy.
+// Reused when all six are present, else generated unprotected. Not deleted.
+static bool ProvisionKeyDir()
+{
+    auto at = [](const char* leaf) { return g_sKeyDir + "/perf_ab_" + leaf + ".key"; };
+    g_sCliKey = at("clikey"); g_sCliAgr = at("cliagr"); g_sCliAcl = at("cliacl");
+    g_sSrvKey = at("srvkey"); g_sSrvAgr = at("srvagr"); g_sSrvAcl = at("srvacl");
+    const std::string* all[] = { &g_sCliKey, &g_sCliAgr, &g_sCliAcl, &g_sSrvKey, &g_sSrvAgr, &g_sSrvAcl };
+    bool bHave = true; for (auto p : all) bHave = bHave && FileExists(*p);
+    if (bHave) { std::printf("keys: reused from %s\n", g_sKeyDir.c_str()); return true; }
+    for (auto p : all) DeleteFileA(p->c_str());
+    unsigned char idC[p2pcng::kEcdsaPubLen], agC[p2pcng::kEcdhPubLen];
+    unsigned char idS[p2pcng::kEcdsaPubLen], agS[p2pcng::kEcdhPubLen];
+    auto ident = [](const std::string& p, unsigned char* pub) {
+        p2pcng::EcdsaP256 k;
+        return k.Generate() && p2pcng::SaveIdentity(p.c_str(), k, p2pcng::IdProtect_None) == p2pcng::IdOk
+            && k.ExportPublic(pub); };
+    auto agree = [](const std::string& p, unsigned char* pub) {
+        p2pcng::EcdhP256 k;
+        return k.Generate() && p2pcng::SaveAgreement(p.c_str(), k, p2pcng::IdProtect_None) == p2pcng::IdOk
+            && k.ExportPublic(pub); };
+    bool ok = ident(g_sCliKey, idC) && agree(g_sCliAgr, agC) && ident(g_sSrvKey, idS) && agree(g_sSrvAgr, agS)
+        && p2pcng::AppendAllowList(g_sCliAcl.c_str(), "PerfAB.Server", idS, agS) == p2pcng::IdOk
+        && p2pcng::AppendAllowList(g_sSrvAcl.c_str(), "PerfAB.Client", idC, agC) == p2pcng::IdOk;
+    if (ok) std::printf("keys: generated into %s (unprotected; copy the directory to the other host)\n",
+                        g_sKeyDir.c_str());
+    return ok;
+}
+
 static bool Provision()
 {
+    if (!g_sKeyDir.empty()) return ProvisionKeyDir();
     g_sCliKey = TempPath("clikey"); g_sCliAgr = TempPath("cliagr"); g_sCliAcl = TempPath("cliacl");
     g_sSrvKey = TempPath("srvkey"); g_sSrvAgr = TempPath("srvagr"); g_sSrvAcl = TempPath("srvacl");
     unsigned char idC[p2pcng::kEcdsaPubLen], agC[p2pcng::kEcdhPubLen];
@@ -260,7 +324,17 @@ public:
 protected:
     virtual msgRESULT On_P2PeerBCast(P2PeerMsg* pMsg) override
     {
-        if (m_bServer)
+        // B7: the server role echoes, and the client role is then the one
+        // that counts - so the measured side is always the timing process.
+        if (m_bServer && g_eRole == RoleServer)
+        {
+            if (pMsg)
+                PostP2PeerMsg(new P2PeerMsg32(kServerAddr, kClientAddr, P2Pmsg_BCast,
+                                              pMsg->Data(), (P2Psize_t)pMsg->DataSize()));
+            NoteDelivered();
+            return msgHANDLED;
+        }
+        if (m_bServer || g_eRole == RoleClient)
         {
             if (pMsg)
             {
@@ -406,6 +480,20 @@ int main(int argc, char* argv[])
       else if (t == "dmx")         g_eTr = TrDmx;
       else if (t == "pipe")        g_eTr = TrPipe;
       else { std::printf("FATAL: PERF_TRANSPORT=%s (want wsa|dmx|pipe).\n", t.c_str()); return 1; } }
+    { const char* rs = std::getenv("PERF_ROLE");                 // B7
+      std::string r = rs ? rs : "";
+      if (r.empty() || r == "both") g_eRole = RoleBoth;
+      else if (r == "server")       g_eRole = RoleServer;
+      else if (r == "client")       g_eRole = RoleClient;
+      else { std::printf("FATAL: PERF_ROLE=%s (want server|client, or unset).\n", r.c_str()); return 1; } }
+    if (const char* p = std::getenv("PERF_PEER"))   if (*p) g_sPeer = p;
+    if (const char* p = std::getenv("PERF_PORT"))   if (*p) kTestPort = (short)std::atoi(p);
+    if (const char* p = std::getenv("PERF_KEYDIR")) if (*p) g_sKeyDir = p;
+    if (g_eRole != RoleBoth && g_eTr != TrWsa)
+    { std::printf("FATAL: PERF_ROLE=%s needs PERF_TRANSPORT=wsa (two processes, maybe two hosts).\n",
+                  RoleName()); return 1; }
+    long nServeIdle = 300;
+    if (const char* p = std::getenv("PERF_SERVE_IDLE")) if (*p) nServeIdle = (std::max)(1L, std::atol(p));
 
     perf::PrintBox("perf_ab");
     std::printf("=== perf_ab — Targetcore loopback-TCP perf A/B ===\n");
@@ -422,6 +510,9 @@ int main(int argc, char* argv[])
                 g_batch);
     std::printf("posture=%c (%s)  transport=%s  (PERF_POSTURE=A..E|L, PERF_TRANSPORT=wsa|dmx|pipe)\n",
                 g_pPost->cTag, g_pPost->pszName, TrName());
+    if (g_eRole != RoleBoth)
+        std::printf("role=%s%s%s  (B7: latency is a ROUND TRIP, throughput counts echoes)\n", RoleName(),
+                    g_eRole == RoleClient ? "  peer=" : "", g_eRole == RoleClient ? g_sPeer.c_str() : "");
     if (const char* k = std::getenv("PERF_KEEP"))
         std::printf("PERF_KEEP=%s: those switches stay at their default (true)\n", k);
     if (g_pPost->bSeal)
@@ -448,28 +539,63 @@ int main(int argc, char* argv[])
     if ((post.bAuth || post.bAttest || post.bSeal) && !Provision())
     { std::printf("FATAL: key provisioning failed.\n"); ScrubTemp(); return 1; }
 
-    PerfHub oServer(kServerAddr, true);
-    if (!ApplyPosture(oServer, false))
-    { std::printf("FATAL: server posture %c did not take.\n", post.cTag); ScrubTemp(); return 1; }
-    HANDLE hS = oServer.SpawnHub();
-    if (!hS) { std::printf("FATAL: server SpawnHub failed.\n"); return 1; }
-    P2PeerCon* pSvc =
-        g_eTr == TrDmx  ? (P2PeerCon*)P2PeerConDmx::ServiceFactory(kClientAddr, kDmxSvc)
-      : g_eTr == TrPipe ? (P2PeerCon*)P2PeerConPipe::ServiceFactory(kClientAddr, kPipeName)
-      :                   (P2PeerCon*)P2PeerConWsa::ServiceFactory(kClientAddr, kTestPort);
-    if (!pSvc) { std::printf("FATAL: ServiceFactory failed.\n"); return 1; }
-    oServer.PostP2PeerCon(pSvc);
-    Sleep(750);
+    // The server hub exists only where this process serves: B7's client role
+    // has no local server and dials PERF_PEER instead.
+    std::unique_ptr<PerfHub> spServer;
+    HANDLE hS = nullptr;
+    if (g_eRole != RoleClient)
+    {
+        spServer.reset(new PerfHub(kServerAddr, true));
+        PerfHub& oServer = *spServer;
+        if (!ApplyPosture(oServer, false))
+        { std::printf("FATAL: server posture %c did not take.\n", post.cTag); ScrubTemp(); return 1; }
+        hS = oServer.SpawnHub();
+        if (!hS) { std::printf("FATAL: server SpawnHub failed.\n"); return 1; }
+        P2PeerCon* pSvc =
+            g_eTr == TrDmx  ? (P2PeerCon*)P2PeerConDmx::ServiceFactory(kClientAddr, kDmxSvc)
+          : g_eTr == TrPipe ? (P2PeerCon*)P2PeerConPipe::ServiceFactory(kClientAddr, kPipeName)
+          :                   (P2PeerCon*)P2PeerConWsa::ServiceFactory(kClientAddr, kTestPort);
+        if (!pSvc) { std::printf("FATAL: ServiceFactory failed.\n"); return 1; }
+        oServer.PostP2PeerCon(pSvc);
+        Sleep(750);
+    }
+
+    // ---- B7 server role: echo until idle, then exit -----------------------
+    if (g_eRole == RoleServer)
+    {
+        std::printf("serving on port %d; exits after %ld s with nothing received.\n",
+                    (int)kTestPort, nServeIdle);
+        std::fflush(stdout);
+        long last = g_recvCount.load();
+        clk::time_point tLast = clk::now();
+        while (ns_since(tLast) / 1e9 < (double)nServeIdle)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            long now = g_recvCount.load();
+            if (now != last) { last = now; tLast = clk::now(); }
+        }
+        std::printf("idle for %ld s; echoed %ld messages in all.\n", nServeIdle, last);
+        spServer->CloseHub();
+        WaitForSingleObject(hS, 3000);
+        CloseHandle(hS);
+        CleanupP2Pmsg();
+        WSACleanup();
+        ScrubTemp();
+        std::printf("Done (exit=0).\n");
+        std::fflush(stdout);
+        return 0;
+    }
 
     PerfHub oClient(kClientAddr, false);
     if (!ApplyPosture(oClient, true))
     { std::printf("FATAL: client posture %c did not take.\n", post.cTag); ScrubTemp(); return 1; }
     HANDLE hC = oClient.SpawnHub();
     if (!hC) { std::printf("FATAL: client SpawnHub failed.\n"); return 1; }
+    std::wstring wPeer(g_sPeer.begin(), g_sPeer.end());   // an IP literal or host name: ASCII
     P2PeerCon* pCli =
         g_eTr == TrDmx  ? (P2PeerCon*)P2PeerConDmx::ClientFactory(kServerAddr, kDmxSvc)
       : g_eTr == TrPipe ? (P2PeerCon*)P2PeerConPipe::ClientFactory(kServerAddr, kPipeName)
-      :                   (P2PeerCon*)P2PeerConWsa::ClientFactory(kServerAddr, L"127.0.0.1", kTestPort);
+      :                   (P2PeerCon*)P2PeerConWsa::ClientFactory(kServerAddr, wPeer.c_str(), kTestPort);
     if (!pCli) { std::printf("FATAL: ClientFactory failed.\n"); return 1; }
     oClient.PostP2PeerCon(pCli);
 
@@ -490,6 +616,8 @@ int main(int argc, char* argv[])
 
     // One tag for every row this run reports: payload/waiter-or-batch/posture/transport.
     std::string tag = std::string("/") + post.cTag + "/" + TrName();
+    if (g_eRole == RoleClient) tag += "/rtt@" + g_sPeer;
+    const char* kLatMetric = g_eRole == RoleClient ? "latency_rtt" : "latency_oneway";
     if (const char* k = std::getenv("PERF_KEEP")) if (*k) tag += std::string("/keep=") + k;
 
     int nExit = 0;
@@ -520,7 +648,8 @@ int main(int argc, char* argv[])
             std::sort(us.begin(), us.end());
             double sum = 0; for (double v : us) sum += v;
             auto pct = [&](double p){ return us[(size_t)std::min<double>(us.size()-1, p*us.size())]; };
-            std::printf("LATENCY (serial one-way, %zu samples, %dB):\n", us.size(), payload);
+            std::printf("LATENCY (serial %s, %zu samples, %dB):\n",
+                        g_eRole == RoleClient ? "ROUND TRIP" : "one-way", us.size(), payload);
             std::printf("  min=%.1f  p50=%.1f  avg=%.1f  p99=%.1f  max=%.1f  (microseconds)\n\n",
                         us.front(), pct(0.50), sum/us.size(), pct(0.99), us.back());
             // CPU us per message: whole process (both hubs, both pumps, the
@@ -530,7 +659,7 @@ int main(int argc, char* argv[])
                 ? (double)(perf::Allocs() - a0) / us.size() : -1;
             std::string param = std::to_string(payload) + "B/" +
                                 (g_blockWait ? "condvar" : "yield") + tag;
-            perf::Report("perf_ab", "latency_oneway", param, "us",
+            perf::Report("perf_ab", kLatMetric, param, "us",
                          perf::Summarise(us), cpuPerMsg, allocsPerMsg);
             std::printf("\n");
             std::fflush(stdout);
@@ -595,10 +724,10 @@ int main(int argc, char* argv[])
 
     // ---- shutdown --------------------------------------------------------
     oClient.CloseHub();
-    oServer.CloseHub();
+    if (spServer) spServer->CloseHub();
     WaitForSingleObject(hC, 3000);
-    WaitForSingleObject(hS, 3000);
-    CloseHandle(hC); CloseHandle(hS);
+    if (hS) WaitForSingleObject(hS, 3000);
+    CloseHandle(hC); if (hS) CloseHandle(hS);
     CleanupP2Pmsg();
     WSACleanup();
     ScrubTemp();
