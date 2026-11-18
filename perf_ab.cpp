@@ -34,6 +34,35 @@
 // Tunables via argv or env:  perf_ab [K_latency] [N_throughput] [payloadBytes]
 //   defaults: K=2000  N=50000  payload=64
 //
+// P0 extensions (p2p_performance.md §3.1 B1, 2026-11-18), all by environment so
+// every existing command line still means what it meant:
+//   PERF_POSTURE=A..E|L  the security posture, the SAME five rows p2p_linkcost
+//                        uses: A everything off (the default), B RequireAuth,
+//                        C + relay
+//                        attestation, D + seal (the tree's defaults), E = D +
+//                        SetLinkPolicy(InProcess|Local, Open). L is what this
+//                        file measured BEFORE 2026-11-18 - RequireAuth(false)
+//                        only - which is NOT A: see the note at kPost. Keys are
+//                        generated per run into temp files and deleted at exit.
+//                        TWO HUBS CANNOT MEASURE THE SEAL: it is end-to-end and
+//                        SealAppMsgOutbound waives it when the link's far end is
+//                        the destination, so here D does C's work (measured
+//                        2026-11-18: same latency, same frame). The seal's cost
+//                        is p2p_linkcost's (three hubs) or B5's relay chain.
+//   PERF_TRANSPORT=wsa|dmx|pipe
+//                        loopback TCP (default, port 7802), in-process Dmx, or a
+//                        named pipe. Trust differs by transport, so E only
+//                        relaxes a link whose class the transport can vouch for
+//                        - the link state line printed at login says which.
+//   frame bytes/msg      read at the RECEIVER off the delivered message: the
+//                        adopted image's declared size (a full-mask
+//                        PrepareP2Piomage, no copy) - the frame the wire carried,
+//                        less the link cypher's own nonce + tag when one is
+//                        active. The note adds P3PmsgBSTR::Sizeof, which is the
+//                        heap's USED bytes, not the frame.
+//                        No library counter exists and P0 changes no library
+//                        code, so this is the honest place to read it.
+//
 // Build (Linux):
 //   g++ -std=c++23 -fpermissive -D_UNICODE -DUNICODE -I. -I../Msgcore -I../Targetcore \
 //       -I../Msgcore/Platform -I../Msgcore/Platform/win-compat perf_ab.cpp \
@@ -45,9 +74,13 @@
 #include "P2Pwin32.h"
 #include "P2PeerHub.h"
 #include "P2PeerConWsa.h"
+#include "P2PeerConDmx.h"
+#include "P2PeerConPipe.h"
 #include "P2PeerMsg.h"
+#include "P2PIdentityStore.h"
 #include "Msgexception.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -59,6 +92,11 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+
+// P0 suite (p2p_performance.md §3): the shared Stats / PERFJSON / CPU-time
+// helpers. Only the reporting is shared; this file keeps its own clock and
+// output lines so numbers taken before 2026-11-18 stay comparable.
+#include "perf_common.h"
 
 using clk = std::chrono::steady_clock;
 static double ns_since(clk::time_point t0)
@@ -91,6 +129,117 @@ static bool                    g_blockWait = false;
 static std::mutex              g_wakeMx;
 static std::condition_variable g_wakeCv;
 
+// --- posture (PERF_POSTURE) — the rows of p2p_linkcost.cpp, verbatim ------
+// L is what this file did before 2026-11-18 - RequireAuth(false) and NOTHING
+// else, so RequireRelayAuth / RequireSeal / RequireRevocation stay at their
+// library defaults, which are all TRUE (P2PAuthLogin.cpp AuthPolicy ctor). With
+// no keys none of them can sign or seal, but they are not free: L vs A is the
+// cost of the switches a caller did not know to turn off. Kept so the numbers
+// taken before that date (F-P0-7's 109 allocs, E-K's n_sys) stay reproducible.
+struct Posture { char cTag; const char* pszName; bool bAuth, bAttest, bSeal, bOpen, bLegacy = false; };
+static const Posture kPost[] =
+{ { 'L', "legacy: RequireAuth(false) only, the rest at defaults", false, false, false, false, true }
+, { 'A', "everything off",                    false, false, false, false }
+, { 'B', "RequireAuth only",                  true,  false, false, false }
+, { 'C', "+ relay attestation",               true,  true,  false, false }
+, { 'D', "+ seal (the tree's defaults)",      true,  true,  true,  false }
+, { 'E', "D + SetLinkPolicy(InProcess|Local, Open)", true, true, true, true }
+};
+static const Posture* g_pPost = &kPost[1];          // A
+
+// --- transport (PERF_TRANSPORT) -------------------------------------------
+enum Transport { TrWsa, TrDmx, TrPipe };
+static Transport   g_eTr = TrWsa;
+static const char* TrName() { return g_eTr == TrDmx ? "dmx" : g_eTr == TrPipe ? "pipe" : "wsa"; }
+static LPCTSTR     kDmxSvc  = _T("PerfAB.Dmx");
+static LPCTSTR     kPipeName = _T("\\\\.\\pipe\\PerfAB");
+
+// --- what the client's link actually did, read at its login ack -----------
+// Without this a posture row is unfalsifiable: "B costs nothing over A" and
+// "B never took" print the same numbers (p2p_linkcost's argument).
+static std::atomic<int> g_nKeyX{-1}, g_nCypher{-1}, g_nAuthed{-1}, g_nTrust{-1};
+
+// --- frame bytes, read at the receiver ------------------------------------
+static std::atomic<long long> g_frameBytes{0};   // sum over delivered messages: wire image
+static std::atomic<long long> g_usedBytes{0};    //                              used heap
+static std::atomic<long>      g_frameN{0};
+static std::atomic<long>      g_badBody{0};      // a delivered body of the wrong length
+static size_t                 g_cbBody = 0;
+
+// --- key material (postures B..E), temp files deleted at exit ------------
+static std::vector<std::string> g_vTemp;
+static std::string g_sCliKey, g_sCliAgr, g_sCliAcl, g_sSrvKey, g_sSrvAgr, g_sSrvAcl;
+
+static std::string TempPath(const char* leaf)
+{
+    char dir[MAX_PATH + 2] = {0};
+    DWORD n = GetTempPathA(MAX_PATH + 1, dir);
+    std::string s = (n > 0 && n <= MAX_PATH) ? std::string(dir) : std::string(".\\");
+    char pid[32]; std::snprintf(pid, sizeof pid, "%lu", (unsigned long)GetCurrentProcessId());
+    s += "perf_ab_"; s += leaf; s += "_"; s += pid; s += ".tmp";
+    DeleteFileA(s.c_str());
+    g_vTemp.push_back(s);
+    return s;
+}
+static void ScrubTemp() { for (auto& s : g_vTemp) DeleteFileA(s.c_str()); g_vTemp.clear(); }
+
+static bool Provision()
+{
+    g_sCliKey = TempPath("clikey"); g_sCliAgr = TempPath("cliagr"); g_sCliAcl = TempPath("cliacl");
+    g_sSrvKey = TempPath("srvkey"); g_sSrvAgr = TempPath("srvagr"); g_sSrvAcl = TempPath("srvacl");
+    unsigned char idC[p2pcng::kEcdsaPubLen], agC[p2pcng::kEcdhPubLen];
+    unsigned char idS[p2pcng::kEcdsaPubLen], agS[p2pcng::kEcdhPubLen];
+    auto ident = [](const std::string& p, unsigned char* pub) {
+        p2pcng::EcdsaP256 k;
+        return k.Generate() && p2pcng::SaveIdentity(p.c_str(), k) == p2pcng::IdOk && k.ExportPublic(pub); };
+    auto agree = [](const std::string& p, unsigned char* pub) {
+        p2pcng::EcdhP256 k;
+        return k.Generate() && p2pcng::SaveAgreement(p.c_str(), k) == p2pcng::IdOk && k.ExportPublic(pub); };
+    if (!ident(g_sCliKey, idC) || !agree(g_sCliAgr, agC) ||
+        !ident(g_sSrvKey, idS) || !agree(g_sSrvAgr, agS)) return false;
+    return p2pcng::AppendAllowList(g_sCliAcl.c_str(), "PerfAB.Server", idS, agS) == p2pcng::IdOk
+        && p2pcng::AppendAllowList(g_sSrvAcl.c_str(), "PerfAB.Client", idC, agC) == p2pcng::IdOk;
+}
+
+// Apply the posture to one hub. bSender: the client seals; the server opens.
+static bool ApplyPosture(P2PeerHub& hub, bool bSender)
+{
+    const Posture& p = *g_pPost;
+    if (p.bLegacy) { hub.RequireAuth(false); return true; }
+    hub.RequireAuth(p.bAuth);
+    hub.RequireRelayAuth(p.bAttest);
+    hub.RequireSeal(bSender && p.bSeal);
+    hub.RequireRevocation(false);     // per-connection, not per-message (p2p_linkcost)
+    // PERF_KEEP=relay,seal,revoke: leave the named switch at its library
+    // default (true) - the per-switch split of L minus A.
+    if (const char* k = std::getenv("PERF_KEEP"))
+    {
+        std::string keep = k;
+        if (keep.find("relay")  != std::string::npos) hub.RequireRelayAuth(true);
+        if (keep.find("seal")   != std::string::npos) hub.RequireSeal(true);
+        if (keep.find("revoke") != std::string::npos) hub.RequireRevocation(true);
+    }
+    if (p.bAuth || p.bAttest || p.bSeal)
+    {
+        const std::string& key = bSender ? g_sCliKey : g_sSrvKey;
+        const std::string& acl = bSender ? g_sCliAcl : g_sSrvAcl;
+        if (hub.SetIdentity(key.c_str()) != p2pcng::IdOk ||
+            hub.SetAllowList(acl.c_str()) != p2pcng::IdOk) return false;
+    }
+    if (p.bSeal)
+    {
+        const std::string& agr = bSender ? g_sCliAgr : g_sSrvAgr;
+        if (hub.SetAgreementKey(agr.c_str()) != p2pcng::IdOk) return false;
+        if (bSender ? !hub.CanSeal() : !hub.CanOpen()) return false;
+    }
+    if (p.bOpen)
+    {
+        hub.SetLinkPolicy(P2PeerConTrust_InProcess, P2PeerLinkPolicy_Open);
+        hub.SetLinkPolicy(P2PeerConTrust_Local,     P2PeerLinkPolicy_Open);
+    }
+    return true;
+}
+
 static void NoteDelivered()
 {
     g_recvCount.fetch_add(1, std::memory_order_relaxed);
@@ -109,14 +258,60 @@ public:
     virtual ~PerfHub() {}
 
 protected:
-    virtual msgRESULT On_P2PeerBCast(P2PeerMsg* /*pMsg*/) override
-    { if (m_bServer) NoteDelivered(); return msgHANDLED; }
+    virtual msgRESULT On_P2PeerBCast(P2PeerMsg* pMsg) override
+    {
+        if (m_bServer)
+        {
+            if (pMsg)
+            {
+                // Two relaxed adds; the length check (not a memcmp) keeps the
+                // receiver's measured work what it was before 2026-11-18.
+                // The WIRE frame is the adopted image's declared size, which a
+                // full-mask prepare returns without a copy (msgcore_bench:
+                // serialize = 35 ns). Sizeof() is the USED part of the heap; the
+                // gap between the two is what M1 trims.
+                pMsg->PrepareP2Piomage(~(DWORD)0);
+                g_frameBytes.fetch_add((long long)pMsg->P2PiomageSize(), std::memory_order_relaxed);
+                pMsg->ReleaseP2Piomage();
+                g_usedBytes.fetch_add((long long)pMsg->Sizeof(), std::memory_order_relaxed);
+                g_frameN.fetch_add(1, std::memory_order_relaxed);
+                if ((size_t)pMsg->DataSize() != g_cbBody) g_badBody.fetch_add(1);
+            }
+            NoteDelivered();
+        }
+        return msgHANDLED;
+    }
+
+    // A hub holding an identity signs its login even where the peer requires no
+    // authentication, and the stock handler refuses a login carrying data. The
+    // GUARD keeps this from bypassing the auth gate the posture is measuring:
+    // only where nothing is required is the login accepted directly
+    // (p2p_linkcost / p2p_sealhop, same reason).
+    virtual conRESULT On_ConLogin(P2PeerCon* pCon, P2PaddrSTR that,
+                                  const void* pv, P2Psize_t n) override
+    {
+        if (IsAuthRequired() || (!pv && !n))
+            return P2PeerHub::On_ConLogin(pCon, that, pv, n);
+        pCon->OnLogin(that);
+        pCon->LoginAck(that, 0, 0);
+        return conHANDLED;
+    }
 
     virtual conRESULT On_ConLoginAck(P2PeerCon* pCon, P2PaddrSTR a, P2PaddrSTR b,
                                      const void* p, P2Psize_t n) override
     {
         conRESULT r = P2PeerHub::On_ConLoginAck(pCon, a, b, p, n);
-        if (!m_bServer) g_loginReady.store(true, std::memory_order_release);
+        if (!m_bServer)
+        {
+            if (pCon)
+            {
+                g_nKeyX   = pCon->IsKeyXDone()      ? 1 : 0;
+                g_nCypher = pCon->IsCypherActive()  ? 1 : 0;
+                g_nAuthed = pCon->IsAuthenticated() ? 1 : 0;
+                g_nTrust  = (int)pCon->EffectiveTrust();
+            }
+            g_loginReady.store(true, std::memory_order_release);
+        }
         return r;
     }
     virtual conRESULT On_ConClose(P2PeerCon* pCon) override
@@ -198,7 +393,21 @@ int main(int argc, char* argv[])
       g_blockWait = bw && bw[0] && bw[0] != '0'; }
     { const char* bs = std::getenv("PERF_BATCH");            // W6 batch-sender size
       g_batch = bs ? (size_t)std::max<long>(0, std::atol(bs)) : 0; }
+    { const char* ps = std::getenv("PERF_POSTURE");
+      if (ps && *ps)
+      {
+          g_pPost = nullptr;
+          for (const Posture& p : kPost) if (p.cTag == (char)std::toupper((unsigned char)*ps)) g_pPost = &p;
+          if (!g_pPost) { std::printf("FATAL: PERF_POSTURE=%s (want A..E or L).\n", ps); return 1; }
+      } }
+    { const char* ts = std::getenv("PERF_TRANSPORT");
+      std::string t = ts ? ts : "";
+      if (t.empty() || t == "wsa") g_eTr = TrWsa;
+      else if (t == "dmx")         g_eTr = TrDmx;
+      else if (t == "pipe")        g_eTr = TrPipe;
+      else { std::printf("FATAL: PERF_TRANSPORT=%s (want wsa|dmx|pipe).\n", t.c_str()); return 1; } }
 
+    perf::PrintBox("perf_ab");
     std::printf("=== perf_ab — Targetcore loopback-TCP perf A/B ===\n");
 #if defined(_WIN32)
     std::printf("backend: Windows / IOCP\n");
@@ -209,41 +418,79 @@ int main(int argc, char* argv[])
                 K, Nthru, payload, (int)kTestPort);
     std::printf("wait=%s  (set PERF_BLOCKWAIT=1 to measure the blocking-waiter floor)\n",
                 g_blockWait ? "condvar-block" : "yield-spin");
-    std::printf("batch=%zu  (set PERF_BATCH=N for the W6 batch-sender path in Phase T)\n\n",
+    std::printf("batch=%zu  (set PERF_BATCH=N for the W6 batch-sender path in Phase T)\n",
                 g_batch);
+    std::printf("posture=%c (%s)  transport=%s  (PERF_POSTURE=A..E|L, PERF_TRANSPORT=wsa|dmx|pipe)\n",
+                g_pPost->cTag, g_pPost->pszName, TrName());
+    if (const char* k = std::getenv("PERF_KEEP"))
+        std::printf("PERF_KEEP=%s: those switches stay at their default (true)\n", k);
+    if (g_pPost->bSeal)
+        // P2PeerCon::SealAppMsgOutbound returns early when the link's far end IS
+        // the destination: the seal is end-to-end and is waived on the last hop,
+        // and with two hubs every hop is the last. So D costs what C costs here,
+        // by design. The seal's cost needs a relay - p2p_linkcost's three hubs,
+        // or B5's relay chain.
+        std::printf("NOTE: two hubs, one hop: the seal is waived on the last hop "
+                    "(P2PeerCon.cpp SealAppMsgOutbound), so %c measures C's work here.\n",
+                    g_pPost->cTag);
+    std::printf("\n");
     std::fflush(stdout);
 
     // fixed payload buffer (NUL-terminated-ish; content irrelevant to timing)
     std::vector<wchar_t> body((size_t)payload / sizeof(wchar_t), L'x');
     if (!body.empty()) body.back() = L'\0';
+    g_cbBody = body.size() * sizeof(wchar_t);
 
     if (!StartupP2Pmsg(64)) { std::printf("FATAL: StartupP2Pmsg failed.\n"); return 1; }
     WSADATA w; WSAStartup(MAKEWORD(2,2), &w);
 
+    const Posture& post = *g_pPost;
+    if ((post.bAuth || post.bAttest || post.bSeal) && !Provision())
+    { std::printf("FATAL: key provisioning failed.\n"); ScrubTemp(); return 1; }
+
     PerfHub oServer(kServerAddr, true);
-    oServer.RequireAuth ( false );
+    if (!ApplyPosture(oServer, false))
+    { std::printf("FATAL: server posture %c did not take.\n", post.cTag); ScrubTemp(); return 1; }
     HANDLE hS = oServer.SpawnHub();
     if (!hS) { std::printf("FATAL: server SpawnHub failed.\n"); return 1; }
-    P2PeerConWsa* pSvc = P2PeerConWsa::ServiceFactory(kClientAddr, kTestPort);
+    P2PeerCon* pSvc =
+        g_eTr == TrDmx  ? (P2PeerCon*)P2PeerConDmx::ServiceFactory(kClientAddr, kDmxSvc)
+      : g_eTr == TrPipe ? (P2PeerCon*)P2PeerConPipe::ServiceFactory(kClientAddr, kPipeName)
+      :                   (P2PeerCon*)P2PeerConWsa::ServiceFactory(kClientAddr, kTestPort);
     if (!pSvc) { std::printf("FATAL: ServiceFactory failed.\n"); return 1; }
     oServer.PostP2PeerCon(pSvc);
     Sleep(750);
 
     PerfHub oClient(kClientAddr, false);
-    oClient.RequireAuth ( false );
+    if (!ApplyPosture(oClient, true))
+    { std::printf("FATAL: client posture %c did not take.\n", post.cTag); ScrubTemp(); return 1; }
     HANDLE hC = oClient.SpawnHub();
     if (!hC) { std::printf("FATAL: client SpawnHub failed.\n"); return 1; }
-    P2PeerConWsa* pCli = P2PeerConWsa::ClientFactory(kServerAddr, L"127.0.0.1", kTestPort);
+    P2PeerCon* pCli =
+        g_eTr == TrDmx  ? (P2PeerCon*)P2PeerConDmx::ClientFactory(kServerAddr, kDmxSvc)
+      : g_eTr == TrPipe ? (P2PeerCon*)P2PeerConPipe::ClientFactory(kServerAddr, kPipeName)
+      :                   (P2PeerCon*)P2PeerConWsa::ClientFactory(kServerAddr, L"127.0.0.1", kTestPort);
     if (!pCli) { std::printf("FATAL: ClientFactory failed.\n"); return 1; }
     oClient.PostP2PeerCon(pCli);
 
     // wait for login handshake
     { clk::time_point t0 = clk::now();
       while (!g_loginReady.load(std::memory_order_acquire))
-      { if (ns_since(t0)/1e6 > 10000) { std::printf("TIMEOUT: no login ack.\n"); return 3; }
+      { if (ns_since(t0)/1e6 > 10000) { std::printf("TIMEOUT: no login ack.\n"); ScrubTemp(); return 3; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1)); } }
-    std::printf("login ack received — link ready.\n\n");
+    std::printf("login ack received — link ready.  link: keyx=%d cypher=%d authed=%d trust=%d\n\n",
+                g_nKeyX.load(), g_nCypher.load(), g_nAuthed.load(), g_nTrust.load());
     std::fflush(stdout);
+
+    // A posture that asked for authentication and got an unauthenticated link
+    // would post posture A's numbers under B's name. Refuse to measure it.
+    if (post.bAuth && g_nAuthed.load() != 1 && !post.bOpen)
+    { std::printf("FATAL: posture %c asked for an authenticated link and did not get one.\n",
+                  post.cTag); ScrubTemp(); return 1; }
+
+    // One tag for every row this run reports: payload/waiter-or-batch/posture/transport.
+    std::string tag = std::string("/") + post.cTag + "/" + TrName();
+    if (const char* k = std::getenv("PERF_KEEP")) if (*k) tag += std::string("/keep=") + k;
 
     int nExit = 0;
 
@@ -258,6 +505,8 @@ int main(int argc, char* argv[])
     if (!nExit)
     {
         std::vector<double> us; us.reserve(K);
+        double cpu0 = perf::CpuNow();
+        unsigned long long a0 = perf::Allocs();   // counted on Linux only (perf_common.h)
         for (long i = 0; i < K; ++i)
         {
             long target = g_recvCount.load() + 1;
@@ -274,6 +523,16 @@ int main(int argc, char* argv[])
             std::printf("LATENCY (serial one-way, %zu samples, %dB):\n", us.size(), payload);
             std::printf("  min=%.1f  p50=%.1f  avg=%.1f  p99=%.1f  max=%.1f  (microseconds)\n\n",
                         us.front(), pct(0.50), sum/us.size(), pct(0.99), us.back());
+            // CPU us per message: whole process (both hubs, both pumps, the
+            // waiter), so a yield-spin waiter shows up here and not in wall time.
+            double cpuPerMsg = (perf::CpuNow() - cpu0) * 1e6 / us.size();
+            double allocsPerMsg = perf::AllocsCounted()
+                ? (double)(perf::Allocs() - a0) / us.size() : -1;
+            std::string param = std::to_string(payload) + "B/" +
+                                (g_blockWait ? "condvar" : "yield") + tag;
+            perf::Report("perf_ab", "latency_oneway", param, "us",
+                         perf::Summarise(us), cpuPerMsg, allocsPerMsg);
+            std::printf("\n");
             std::fflush(stdout);
         }
     }
@@ -282,6 +541,8 @@ int main(int argc, char* argv[])
     if (!nExit)
     {
         long base = g_recvCount.load();
+        double cpu0 = perf::CpuNow();
+        unsigned long long a0 = perf::Allocs();
         clk::time_point t0 = clk::now();
         PostMany(oClient, body, Nthru);   // W6: batch when PERF_BATCH>0, else single-post
         double post_ms = ns_since(t0) / 1e6;
@@ -297,7 +558,38 @@ int main(int argc, char* argv[])
             std::printf("  post-all=%.1f ms  drain-all=%.1f ms\n", post_ms, drain_ms);
             std::printf("  %.0f msgs/sec   %.1f MiB/sec   %.2f us/msg\n\n",
                         msgs_s, mib_s, (drain_ms*1e3)/Nthru);
+            // One sample, so min = p50 = max: the driver's interleaved runs
+            // supply the distribution. Unit msgs/s; cpu_per_op is CPU us/msg.
+            perf::Stats s; s.n = 1; s.min = s.p50 = s.avg = s.p99 = s.max = msgs_s;
+            std::string param = std::to_string(payload) + "B/batch" + std::to_string(g_batch) + tag;
+            perf::Report("perf_ab", "throughput", param, "msgs/s", s,
+                         (perf::CpuNow() - cpu0) * 1e6 / Nthru,
+                         perf::AllocsCounted() ? (double)(perf::Allocs() - a0) / Nthru : -1,
+                         nullptr, "us/msg");
             std::fflush(stdout);
+        }
+    }
+
+    // ---- frame bytes per delivered message, and the body check -----------
+    if (!nExit)
+    {
+        long nF = g_frameN.load();
+        if (nF > 0)
+        {
+            double avg = (double)g_frameBytes.load() / nF;
+            perf::Stats s; s.n = (size_t)nF; s.min = s.p50 = s.avg = s.p99 = s.max = avg;
+            double used = (double)g_usedBytes.load() / nF;
+            char note[160];
+            std::snprintf(note, sizeof note, "payload=%zu B, heap used=%.0f B, frame/payload=%.1fx%s",
+                          g_cbBody, used, g_cbBody ? avg / g_cbBody : 0.0,
+                          g_nCypher.load() == 1 ? ", + link cypher overhead" : "");
+            perf::Report("perf_ab", "frame_bytes", std::to_string(payload) + "B" + tag,
+                         "B/msg", s, -1, -1, note);
+        }
+        if (g_badBody.load() != 0)
+        {
+            std::printf("FAIL: %ld delivered bodies had the wrong length.\n", g_badBody.load());
+            nExit = 1;
         }
     }
 
@@ -309,6 +601,7 @@ int main(int argc, char* argv[])
     CloseHandle(hC); CloseHandle(hS);
     CleanupP2Pmsg();
     WSACleanup();
+    ScrubTemp();
 
     std::printf("Done (exit=%d).\n", nExit);
     std::fflush(stdout);

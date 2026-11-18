@@ -340,6 +340,32 @@ add_test(NAME p2p_bigreport COMMAND p2p_bigreport 7823)
 set_tests_properties(p2p_bigreport PROPERTIES
     TIMEOUT 90 RESOURCE_LOCK loopback_7823 LABELS security)
 
+# p2p_oversize: F-P0-15 (p2p_performance_progress.md). An outbound message whose
+# FRAME was over 32768 bytes went out anyway - nothing read m_dwMaxSendSize - and
+# the receiver refused it in RecvP2PeerMsg by THROWING, which dropped the link.
+# The poster was told nothing and everything queued behind it was lost. Measured
+# 2026-11-18: payload 30,600 B -> frame 32,682 delivered; 30,700 B -> 32,782,
+# "Attempt to exceed maximum (32768)", connection gone.
+#
+# Fixed 2026-11-19: P2Peerio::SendP2PeerMsg measures its frame, cypher growth
+# included, and writes nothing over the limit (kSendRefusedFrame); P2PeerCon
+# refuses the MESSAGE, reports it to the source as P2Pevent_UNDELIVERABLE, keeps
+# the link, and sends the next. Transports with their own framing (Dmx, BSTR,
+# P2PeerWeb's HTTP io) override SendP2PeerMsg and are untouched - p2pweb_w12
+# sends 34 KB HTTP responses and is the guard on that.
+#
+# Two modes, two ports, because the limit sits in a different place on each:
+# PLAIN (31,000 B refused) and CYPHER (30,680 B - a plain frame of 32,762 that
+# fits, a cyphered one that does not - refused). Each has an inline positive
+# control at 30,600 B, and CYPHER exits 3 if the link got no session cypher.
+#   STATUS: PASSES        (measured 2026-11-19, Windows Debug + Release)
+add_executable(p2p_oversize p2p_oversize.cpp)
+_mscs_test_common(p2p_oversize)
+target_link_libraries(p2p_oversize PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_oversize COMMAND p2p_oversize 7822 7825)
+set_tests_properties(p2p_oversize PROPERTIES
+    TIMEOUT 90 RESOURCE_LOCK "loopback_7822;loopback_7825" LABELS security)
+
 # p2p_reportsign: F-S9-1 - the undeliverable report, and the exemption it used
 # to need. GateRelayInbound refuses a source nobody has attested for, and the
 # library's OWN report could never satisfy it: WrappedResponseFactory SWAPS the
@@ -2470,12 +2496,37 @@ if(NOT WIN32)
     add_executable(teardown_stress teardown_stress.cpp)
     _mscs_test_common(teardown_stress)
     target_link_libraries(teardown_stress PRIVATE targetcore msgcore p2pplatform)
-
-    # perf_ab: throughput+latency A/B (§8). Built for reproducibility but NOT gated (timing).
-    add_executable(perf_ab perf_ab.cpp)
-    _mscs_test_common(perf_ab)
-    target_link_libraries(perf_ab PRIVATE targetcore msgcore p2pplatform)
 endif()
+
+# perf_ab: throughput+latency A/B (LinuxPortPlan §8, p2p_PumpPerf, and B1 of
+# p2p_performance.md §3.1). BOTH PLATFORMS since 2026-11-18. It was built on
+# Linux only and run standalone on Windows, which is why no Windows number for it
+# was ever taken the same way twice; P0 needs it on both.
+#
+# Registered with LABELS measure, like p2p_linkcost: a timing number is never a
+# verdict. The exit code still is - 3 if a phase timed out, because a run that
+# lost messages must not post a throughput figure. Excluded from a gate run with
+# `ctest -LE measure`. Port 7802 is shared with teardown_stress, which is built
+# but never registered, so the lock is only against a second perf_ab.
+add_executable(perf_ab perf_ab.cpp)
+_mscs_test_common(perf_ab)
+target_include_directories(perf_ab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/perf)
+target_link_libraries(perf_ab PRIVATE targetcore msgcore p2pplatform)
+if(NOT WIN32)
+    # Allocations per message, whole process: on Linux the exe's operator new
+    # interposes over libmsgcore/libtargetcore. Not on Windows - each DLL has its
+    # own, and MFC supplies the exe's (perf/perf_common.h).
+    target_compile_definitions(perf_ab PRIVATE PERF_COUNT_ALLOCS)
+endif()
+add_test(NAME perf_ab COMMAND perf_ab 2000 50000 64)
+set_tests_properties(perf_ab PROPERTIES
+    TIMEOUT 300 RESOURCE_LOCK loopback_7802 LABELS measure)
+
+# The rest of the P0 performance suite (p2p_performance.md §3): B0 perf_floor,
+# B3 crypto_bench, and the benches still to come. A subdirectory so the suite is
+# one place; it applies its own loader path, since _mscs_apply_loader_path()
+# reads one directory's TESTS property.
+add_subdirectory(perf)
 
 
 

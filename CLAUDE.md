@@ -166,10 +166,11 @@ Conventions across them:
   | 7835 | `p2p_backpressure` | | 7858 | `p2p_linktrust` |
   | 7836 | `p2p_authchannel`  | | | |
 
-  (7812 went to `p2p_acceptunnamed` and 7817 to `p2p_sealwire` on 2026-10-16, after this
-  table was derived.)
-  **Free in range: 7822, 7825, 7829, 7831, 7832, 7837, 7839, 7841, 7843**, then
-  7859 up. Take one of those for anything new. Do **not** infer a free port from the end of
+  (7812 went to `p2p_acceptunnamed` and 7817 to `p2p_sealwire` on 2026-10-16, 7837 and 7859
+  to later `p2p_*` gates, 7860 to `p2p_ucastgate` (shared, under the same lock, with
+  `perf/perf_fanout_fan`), 7861–7864 to `perf/perf_fanout_chain`, and 7822 + 7825 to
+  `p2p_oversize` on 2026-11-19 — all after this table was derived.)
+  **Free in range: 7829, 7831, 7832, 7839, 7841, 7843**, then 7865 up. Take one of those for anything new. Do **not** infer a free port from the end of
   this table — that is precisely how the old list misled, since it stopped at 7824 while
   7826–7858 were already taken. Re-derive with
   `grep -oE "loopback_[0-9]+" CMakeLists.txt | sort -u` rather than trusting the table.
@@ -179,7 +180,10 @@ Conventions across them:
 The suites and most harnesses are portable and gate on both toolchains. Platform-specific
 pieces: `linux-shim/COleTime_Ext.h` stands in for MsgcoreMFC's real header on Linux (on
 Windows `MsgcoreMFC/COleTime_Ext.cpp` + `CTime_Ext.cpp` are compiled *into* `unit_suite` with
-`MsgcoreMFC_EXPORTS`); `com232_mesh`, `teardown_stress` and `perf_ab` are Linux-only;
+`MsgcoreMFC_EXPORTS`); `com232_mesh` and `teardown_stress` are Linux-only (`perf_ab` was
+too, until 2026-11-18; it is now registered on both, `LABELS measure`, alongside the P0
+performance suite in `perf/` — see `../p2p_performance.md` §3; `ctest -LE measure` keeps
+timing runs out of a gate run);
 `seal_interop` is registered on Windows only and verifies the checked-in `vectors/*.vec`
 sealed by the *other* backend. `golden_ref.p2p` is a binary serialized heap image compared
 byte-for-byte across OSes — `.gitattributes` marks it `binary` and the invariants script
