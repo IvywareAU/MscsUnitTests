@@ -98,6 +98,12 @@ int main ( int argc, char *argv[] )
             Run ( "aes_gcm_setkey", "", perf::TimeOp ( [&] {
                       return g.SetKey ( key, sizeof key ); }, 200, 50 * scale ) );
         }
+        //  A FRESH object per op, which is what p2pseal does: 1 + readers of
+        //  these per seal, 2 per open. The case above reuses one object and so
+        //  never sees a per-object provider open (T1h, 2026-11-19).
+        Run ( "aes_gcm_new_setkey", "", perf::TimeOp ( [&] {
+                  p2pcng::AesGcm n;
+                  return n.SetKey ( key, sizeof key ); }, 200, 50 * scale ) );
 
         p2pcng::AesGcm g;
         if ( !g.SetKey ( key, sizeof key ) ) { std::printf ( "SETUP: SetKey failed\n" ); return 1; }
