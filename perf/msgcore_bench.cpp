@@ -56,6 +56,8 @@
 // its own operator new and MFC supplies the exe's (perf_common.h).
 //
 // Usage: msgcore_bench [scale]   scale multiplies every batch (default 1).
+//        msgcore_bench --profile lookup_alt|lookup_miss|fieldref_read [seconds] [n]
+//                                one case in a loop, for a profiler.
 // Exit: 0 ran, 1 a correctness check failed. Never a timing verdict.
 
 #include "stdafx.h"
@@ -344,10 +346,71 @@ namespace
         }, Batch ( 5000 ), kReps );
         Emit ( "capi_mgr", "create+destroy", r );
     }
+
+    // ---------------------------------------------------------------------
+    //  --profile <case> [seconds] [n]: ONE lookup case in a tight loop on a
+    //  received n-field heap (default 512), for `perf record` / VS profiler.
+    //  Added 2026-11-20 for M2's question (plan §M2): how much of a lookup
+    //  walk is re-checking and how much is handle Connect + compare. Times
+    //  nothing; prints the op count so the profile can be normalised.
+    int Profile ( const char *kase, double seconds, int n )
+    {
+        Msg m = NewMsg ( );
+        Fill ( *m.root, n );
+        std::vector<char> img = Image ( *m.bstr );
+        std::unique_ptr<P3PmsgBSTR> in = Adopt ( img );
+        P3PmsgItem &root = in->r_item ( VBLockBSTR_MSG );
+        const std::wstring first = Name ( 0 ), last = Name ( n - 1 );
+        const std::string k = kase;
+
+        auto t0 = std::chrono::steady_clock::now ( );
+        long long ops = 0;
+        bool flip = false, ok = true;
+        while ( std::chrono::duration<double> ( std::chrono::steady_clock::now ( ) - t0 ).count ( ) < seconds )
+        {
+            for ( int i = 0; i < 64; ++i, ++ops )
+            {
+                if ( k == "lookup_alt" )
+                {
+                    flip = !flip;
+                    ok &= flip ? root.SelectItem ( first.c_str ( ) ).c_int ( ) == 0
+                               : root.SelectItem ( last.c_str ( ) ).c_int ( ) == n - 1;
+                }
+                else if ( k == "lookup_miss" )
+                    ok &= !root.Exists ( L"absent" );
+                else if ( k == "fieldref_read" )
+                    ok &= Field ( root, last.c_str ( ) ).AsInt ( ) == n - 1;
+                else
+                {
+                    std::printf ( "unknown profile case %s\n", kase );
+                    return 1;
+                }
+            }
+        }
+        double s = std::chrono::duration<double> ( std::chrono::steady_clock::now ( ) - t0 ).count ( );
+        std::printf ( "profile %s n=%d: %lld ops in %.2f s = %.0f ns/op%s\n",
+                      kase, n, ops, s, s * 1e9 / (double)ops, ok ? "" : "  (READBACK FAILED)" );
+        return ok ? 0 : 1;
+    }
 }
 
 int main ( int argc, char **argv )
 {
+    if ( argc > 2 && std::strcmp ( argv[1], "--profile" ) == 0 )
+    {
+        for ( int i = 0; i < 512; ++i )
+        {
+            wchar_t b[16];
+            std::swprintf ( b, 16, L"f%04d", i );
+            g_names.emplace_back ( b );
+        }
+        double secs = argc > 3 ? std::atof ( argv[3] ) : 10.0;
+        int    n    = argc > 4 ? std::atoi ( argv[4] ) : 512;
+        if ( n < 2 || n > 512 ) n = 512;
+        int rc = 1;
+        Guard ( [&] { rc = Profile ( argv[2], secs, n ); return true; } );
+        return rc;
+    }
     if ( argc > 1 ) g_scale = std::atol ( argv[1] );
     if ( g_scale < 1 ) g_scale = 1;
 

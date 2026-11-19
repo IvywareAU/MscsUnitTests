@@ -832,6 +832,33 @@ static void Test_Curs_GotoKeyLifetime()
         TF_CHECK(oItem.Exists(L"Present"));
         TF_CHECK(!oItem.Exists(L"Absent"));
     }
+
+    //  P3Pmsg_SelectObjectRecurse retries a missed name with the WHOLE rest of
+    //  the path, so a stored name that contains a delimiter ("Log.pys") is
+    //  still found when "Log" is not. 2026-11-20 the retry was limited to
+    //  paths that still hold a delimiter: before that a plain miss walked the
+    //  siblings twice with the same key (p2p_performance F-P1-3). This pins
+    //  both halves: the dotted retry still answers, a plain miss still misses,
+    //  and a real descent through "Dir.Kid" is untouched.
+    TF_CASE("Exists() finds a stored dotted name; a plain miss stays a miss")
+    {
+        P3PmsgItem oItem;
+        oItem.r_name() = L"DotHost";
+        oItem.r_Desc(P3PmsgField::AttrCMD_Create);
+        oItem.r_Desc() += P3PmsgField(L"Log.pys");
+        oItem.r_Desc() += P3PmsgField(L"Dir");
+        P3PmsgField &oDir = oItem.SelectItem(L"Dir");
+        oDir.r_Desc(P3PmsgField::AttrCMD_Create);
+        oDir.r_Desc() += P3PmsgField(L"Kid");
+
+        TF_CHECK(oItem.Exists(L"Log.pys"));    // the retry's reason to exist
+        TF_CHECK(oItem.Exists(L"LOG.PYS"));    // case-insensitive, as Goto is
+        TF_CHECK(!oItem.Exists(L"Log"));       // plain miss, single walk now
+        TF_CHECK(!oItem.Exists(L"Log.txt"));   // dotted miss: retry runs, misses
+        TF_CHECK(oItem.Exists(L"Dir.Kid"));    // ordinary descent
+        TF_CHECK(!oItem.Exists(L"Dir.Nobody"));
+        TF_CHECK(!oItem.Exists(L"Absent"));
+    }
 }
 
 // ---------------------------------------------------------------------------
