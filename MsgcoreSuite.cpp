@@ -840,6 +840,65 @@ static void Test_Curs_GotoKeyLifetime()
     //  siblings twice with the same key (p2p_performance F-P1-3). This pins
     //  both halves: the dotted retry still answers, a plain miss still misses,
     //  and a real descent through "Dir.Kid" is untouched.
+    //  M3 (Msgcore 3.4.5): Goto rules a sibling out without connecting a
+    //  handle, and judges plain-ASCII names only; anything else goes to the
+    //  original compare. These pin what must not change: the first match wins,
+    //  the compare is case-insensitive, names longer and shorter than the key,
+    //  and non-ASCII names (including one whose ASCII spelling only Unicode
+    //  case folding can reach). Run on a standalone item (SYS heap) and inside
+    //  an IOMAGE manager, where names go through the image-bounded path. The
+    //  same case is in Msgcore/tests/MsgcoreSuite.cpp.
+    TF_CASE("name lookup: first match wins, ASCII and non-ASCII, SYS and IOMAGE heaps")
+    {
+        auto populate = [](P3PmsgItem &o) {
+            o.r_Desc(P3PmsgField::AttrCMD_Create);
+            o.r_Desc() += P3PmsgField(L"Größe",      P3PmsgData((int)1));
+            o.r_Desc() += P3PmsgField(L"Kelvin",          P3PmsgData((int)2));
+            o.r_Desc() += P3PmsgField(L"Rocket\U0001F680",     P3PmsgData((int)3));
+            o.r_Desc() += P3PmsgField(L"Dup",                  P3PmsgData((int)4));
+            o.r_Desc() += P3PmsgField(L"DUP",                  P3PmsgData((int)5));
+            o.r_Desc() += P3PmsgField(L"Duplex",               P3PmsgData((int)6));
+            o.r_Desc() += P3PmsgField(L"Du",                   P3PmsgData((int)7));
+            o.r_Desc() += P3PmsgField(L"Back`tick",            P3PmsgData((int)8));
+        };
+        auto value = [](P3PmsgItem &o, LPCWSTR lpszName) -> int {
+            P3PmsgObject oObj = o.r_Desc().SelectObject(lpszName);
+            if (oObj.IsVoid()) return 0;
+            P3PmsgField oField(oObj);
+            return oField.c_int();
+        };
+        //  The Kelvin sign lowers to 'k' under Unicode folding; whether this
+        //  platform's _wcsicmp folds it is the platform's business. Lookup has to
+        //  agree with it either way.
+        const int nKelvin = _wcsicmp(L"Kelvin", L"kelvin") == 0 ? 2 : 0;
+        auto check = [&](P3PmsgItem &o) {
+            TF_CHECK_EQ(value(o, L"dup"), 4);          // first of Dup / DUP
+            TF_CHECK_EQ(value(o, L"DuP"), 4);
+            TF_CHECK_EQ(value(o, L"DUPLEX"), 6);
+            TF_CHECK_EQ(value(o, L"du"), 7);
+            TF_CHECK_EQ(value(o, L"d"), 0);            // shorter than every name
+            TF_CHECK_EQ(value(o, L"dupl"), 0);
+            TF_CHECK_EQ(value(o, L"duplexx"), 0);      // longer than every name
+            TF_CHECK_EQ(value(o, L"BACK`TICK"), 8);    // 0x60 is not a letter
+            TF_CHECK_EQ(value(o, L"GRößE"),          // ASCII folds, the rest
+                        _wcsicmp(L"GRößE", L"Größe") == 0 ? 1 : 0);
+            TF_CHECK_EQ(value(o, L"Größe"), 1);   // non-ASCII key
+            TF_CHECK_EQ(value(o, L"Rocket\U0001F680"), 3);   // astral: a surrogate pair
+            TF_CHECK_EQ(value(o, L"kelvin"), nKelvin);       // ASCII key, non-ASCII name
+            TF_CHECK_EQ(value(o, L"Kelvin"), 2);
+        };
+
+        P3PmsgItem oItem;
+        oItem.r_name() = L"LookupHost";
+        populate(oItem);
+        check(oItem);
+
+        P2PmsgMgr mgr(VBLock_Addr64, 4096, 1u << 20);
+        mgr.r_name() = L"Root";
+        populate(mgr);
+        check(mgr);
+    }
+
     TF_CASE("Exists() finds a stored dotted name; a plain miss stays a miss")
     {
         P3PmsgItem oItem;
