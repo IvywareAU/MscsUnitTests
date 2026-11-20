@@ -56,7 +56,8 @@
 // its own operator new and MFC supplies the exe's (perf_common.h).
 //
 // Usage: msgcore_bench [scale]   scale multiplies every batch (default 1).
-//        msgcore_bench --profile lookup_alt|lookup_miss|fieldref_read [seconds] [n]
+//        msgcore_bench --profile [local_]lookup_alt|lookup_miss|fieldref_read [seconds] [n]
+//        (local_: on the message as built, not as received -- the trusted-bit heap)
 //                                one case in a loop, for a profiler.
 // Exit: 0 ran, 1 a correctness check failed. Never a timing verdict.
 
@@ -353,15 +354,21 @@ namespace
     //  Added 2026-11-20 for M2's question (plan §M2): how much of a lookup
     //  walk is re-checking and how much is handle Connect + compare. Times
     //  nothing; prints the op count so the profile can be normalised.
+    //  A "local_" prefix (local_lookup_alt, ...) runs the same case on the
+    //  message as BUILT, not as received: the heap M2's trusted bit covers
+    //  (Msgcore 3.4.7), where a Release build skips the per-access name
+    //  bounds. Without the prefix the heap is adopted and keeps every check.
     int Profile ( const char *kase, double seconds, int n )
     {
         Msg m = NewMsg ( );
         Fill ( *m.root, n );
         std::vector<char> img = Image ( *m.bstr );
         std::unique_ptr<P3PmsgBSTR> in = Adopt ( img );
-        P3PmsgItem &root = in->r_item ( VBLockBSTR_MSG );
+        std::string k = kase;
+        const bool bLocal = k.rfind ( "local_", 0 ) == 0;
+        if ( bLocal ) k = k.substr ( 6 );
+        P3PmsgItem &root = bLocal ? *m.root : in->r_item ( VBLockBSTR_MSG );
         const std::wstring first = Name ( 0 ), last = Name ( n - 1 );
-        const std::string k = kase;
 
         auto t0 = std::chrono::steady_clock::now ( );
         long long ops = 0;
