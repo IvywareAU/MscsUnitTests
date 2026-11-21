@@ -2099,26 +2099,38 @@ set_tests_properties(p2p_linkcost PROPERTIES
 # SealAppMsgOutbound must refuse to send. Waiver off, nothing arrives; waiver
 # on with Carol a hub in this process, the same message arrives.
 #
-# NOT COVERED, and it is in the file's header too: an out-of-process
-# destination behaviourally (it needs a second PROCESS - the whole point of the
-# predicate is that no address this harness can invent distinguishes the two),
-# and the attestation half on the receive side (GateRelayInbound is never
-# reached in a chain, because the relay is a common ancestor of both ends -
-# securityRevision_progress.md finding 11).
+# TARGETCORE 3.6.0 MADE THE WAIVER THE DEFAULT (p2p_performance.md decision 2)
+# and replaced the deployment assumption with three per-hop guards keyed on
+# whether a LINK leaves the process. Phases 1/1b now assert ON. Phases 5 and 6
+# are the guards, and they need a link that leaves: TCP loopback is one as far
+# as the library can tell (P2Peerio::LeavesProcess is true for every transport
+# but DMX), so a hub behind it stands in for a hub on another host.
+#   phase 5, A-B-C:     Alice -TCP- Mid -DMX- Carol: Alice must seal, cannot,
+#                       the body does not arrive (guard 1).
+#   phase 6, A-A2-B-C:  Alice -DMX- Mid -TCP- Far -DMX- Carol, Mid not sealing:
+#                       Mid refuses the waived body (guard 3).
+# Each has an EMPTY-body positive control on the same route; exit 3 if it does
+# not arrive.
 #
-# NO SOCKETS, so no RESOURCE_LOCK and no port. Per-phase hub addresses, which
-# is p2p_linktrust's lesson applied before it could cost anything.
+#   phase 7, guard 2:   the receive side. A chain never reaches GateRelayInbound
+#                       (the relay is a common ancestor of both ends, finding
+#                       11), so four hubs: Top -DMX- Src, Top -DMX- P, P - Dst.
+#                       Src is not below P, so Dst gates Src's messages. 7a, Dst
+#                       on DMX: Src's unsigned (waived) body is admitted. 7b, Dst
+#                       on TCP: the same body is refused. The control is SIGNED
+#                       (Src's waiver off for it), since the gate refuses an
+#                       unattested message whatever it carries; exit 3 if lost.
 #
-# No sockets is also why this one carries no qualification where p2p_linktrust
-# carries a long one: finding 7 lives in the live TCP path, and this test never
-# enters it.
+# PORTS: phases 0-4 use none. Phase 5 listens on argv[1], phase 6 on argv[2],
+# phase 7b on argv[3], one lock each. Per-phase hub addresses, p2p_linktrust's
+# lesson.
 #   STATUS: PASSES
 add_executable(p2p_e2ewaive p2p_e2ewaive.cpp)
 _mscs_test_common(p2p_e2ewaive)
 target_link_libraries(p2p_e2ewaive PRIVATE targetcore msgcore p2pplatform)
-add_test(NAME p2p_e2ewaive COMMAND p2p_e2ewaive)
+add_test(NAME p2p_e2ewaive COMMAND p2p_e2ewaive 7829 7831 7832)
 set_tests_properties(p2p_e2ewaive PROPERTIES
-    TIMEOUT 180 LABELS security)
+    TIMEOUT 180 RESOURCE_LOCK "loopback_7829;loopback_7831;loopback_7832" LABELS security)
 
 # p2p_fuzzframe: the FUZZ HARNESS for the framing path (Ahtung_Disaster.md,
 # Track B item 5). C1 — the pre-auth heap overflow from an undersized wire

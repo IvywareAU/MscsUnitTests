@@ -56,6 +56,9 @@
 //                         same, and the per-address entries are what make the
 //                         hubs distinct peers.
 //   PERF_KEEP=relay,seal,revoke   leave those switches at their default.
+//   PERF_WAIVE=0          WaiveEndToEndInProcess(false) on every hub: the
+//                         default before Targetcore 3.6.0. Unset = the library
+//                         default (on since 3.6.0). Only a Dmx chain differs.
 //   PERF_TRANSPORT=wsa|dmx  chain only (fan is wsa: one listener is the shape
 //                         under test; Dmx needs a service per peer, which
 //                         would double the list the route walks).
@@ -185,6 +188,10 @@ static bool ApplyPosture(P2PeerHub& hub, Role eRole)
         if (keep.find("seal")   != std::string::npos) hub.RequireSeal(true);
         if (keep.find("revoke") != std::string::npos) hub.RequireRevocation(true);
     }
+    // PERF_WAIVE=0: the pre-3.6.0 default (waiver off), for the A/B that
+    // measured making WaiveEndToEndInProcess the default (decision 2).
+    if (const char* w = std::getenv("PERF_WAIVE"); w && std::strcmp(w, "0") == 0)
+        hub.WaiveEndToEndInProcess(false);
     if (p.bAuth || p.bAttest || p.bSeal)
         if (hub.SetIdentity(g_sKey.c_str()) != p2pcng::IdOk ||
             hub.SetAllowList(g_sAcl.c_str()) != p2pcng::IdOk) return false;
@@ -549,6 +556,11 @@ int main(int argc, char* argv[])
         std::printf("PERF_KEEP=%s: those switches stay at their default (true)\n", k);
     g_tag = std::string("/") + g_pPost->cTag + "/" + (g_bDmx ? "dmx" : "wsa");
     if (const char* k = std::getenv("PERF_KEEP"); k && *k) g_tag += std::string("/keep=") + k;
+    if (const char* w = std::getenv("PERF_WAIVE"); w && std::strcmp(w, "0") == 0)
+    {
+        g_tag += "/waive=0";
+        std::printf("PERF_WAIVE=0: WaiveEndToEndInProcess(false), the pre-3.6.0 default\n");
+    }
     std::fflush(stdout);
 
     std::vector<unsigned char> body((size_t)std::max<long>(1, payload));

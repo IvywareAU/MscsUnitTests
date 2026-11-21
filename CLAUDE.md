@@ -170,7 +170,7 @@ Conventions across them:
   to later `p2p_*` gates, 7860 to `p2p_ucastgate` (shared, under the same lock, with
   `perf/perf_fanout_fan`), 7861–7864 to `perf/perf_fanout_chain`, and 7822 + 7825 to
   `p2p_oversize` on 2026-11-19 — all after this table was derived.)
-  **Free in range: 7829, 7831, 7832, 7839, 7841, 7843**, then 7865 up. Take one of those for anything new. Do **not** infer a free port from the end of
+  7829 + 7831 + 7832 to `p2p_e2ewaive` phases 5/6/7b on 2026-11-21. **Free in range: 7839, 7841, 7843**, then 7865 up. Take one of those for anything new. Do **not** infer a free port from the end of
   this table — that is precisely how the old list misled, since it stopped at 7824 while
   7826–7858 were already taken. Re-derive with
   `grep -oE "loopback_[0-9]+" CMakeLists.txt | sort -u` rather than trusting the table.
