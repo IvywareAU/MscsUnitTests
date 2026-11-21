@@ -355,10 +355,14 @@ set_tests_properties(p2p_bigreport PROPERTIES
 # sends 34 KB HTTP responses and is the guard on that.
 #
 # Two modes, two ports, because the limit sits in a different place on each:
-# PLAIN (31,000 B refused) and CYPHER (30,680 B - a plain frame of 32,762 that
-# fits, a cyphered one that does not - refused). Each has an inline positive
-# control at 30,600 B, and CYPHER exits 3 if the link got no session cypher.
-#   STATUS: PASSES        (measured 2026-11-19, Windows Debug + Release)
+# PLAIN (a frame 64 B over the limit refused) and CYPHER (a plain frame of
+# 32,762 that fits, a cyphered one of 32,790 that does not - refused). Each has
+# an inline positive control 64 B under the limit, and CYPHER exits 3 if the
+# link got no session cypher. The payloads are MEASURED from the frame overhead
+# since M1 (Msgcore 3.5.0 / Targetcore 3.7.0): 565 B now, against the ~2,082 B
+# of slack the old constants (30,600 / 31,000 / 30,680) were computed from -
+# on 3.7.0 the old 31,000 B "oversized" message fits and was delivered.
+#   STATUS: PASSES        (measured 2026-11-21, Windows Debug, on M1)
 add_executable(p2p_oversize p2p_oversize.cpp)
 _mscs_test_common(p2p_oversize)
 target_link_libraries(p2p_oversize PRIVATE targetcore msgcore p2pplatform)

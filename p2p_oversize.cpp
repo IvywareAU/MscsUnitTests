@@ -49,14 +49,20 @@
 //   Run twice, once per link mode, because the two modes put the limit in
 //   different places and a fix that forgot the cypher would pass the first:
 //
-//     PLAIN   RequireAuth(false), no cypher. 30,600 B delivered (control);
-//             31,000 B must be refused and reported, link up; 64 B after it
-//             must arrive.
+//     PLAIN   RequireAuth(false), no cypher. A payload whose frame is 64 B
+//             under the limit is delivered (control); one 64 B over must be
+//             refused and reported, link up; 64 B after it must arrive.
 //     CYPHER  RequireAuth(true) with keys, so the link runs the key agreement
-//             and installs the session cypher (checked, not assumed). 30,600 B
-//             delivered (control); 30,680 B - whose PLAIN frame is 32,762 and
-//             fits, but whose cyphered frame does not - must be refused and
+//             and installs the session cypher (checked, not assumed). The same
+//             control is delivered; a payload whose PLAIN frame fits with 6 B
+//             to spare, but whose cyphered frame does not, must be refused and
 //             reported, link up; 64 B after it must arrive.
+//
+//   THE SIZES ARE MEASURED (FrameOverhead), since M1 (Msgcore 3.5.0 /
+//   Targetcore 3.7.0) took the heap's slack off the wire. Before it they were
+//   30,600 control and 31,000 / 30,680 oversized, against payload + 2,082; on
+//   3.7.0 that 31,000 B message FITS and was delivered, which is M1 doing what
+//   it says (the usable maximum rises, F-P0-15) and not a regression.
 //
 // VERDICT = process EXIT CODE:
 //   0  PASS          both modes: refused, reported, link kept
@@ -216,14 +222,40 @@ static void PostBytes(OverHub& leaf, P2PaddrSTR src, P2PaddrSTR dst, int nBytes)
     leaf.PostP2PeerMsg(new P2PeerMsg32(src, dst, P2Pmsg_BCast, &v[0], (P2Psize_t)nBytes));
 }
 
+// The frame's overhead over its payload, measured on a message built exactly
+// as PostBytes builds one and trimmed exactly as the send path trims it.
+// MEASURED, NOT WRITTEN DOWN, since M1 (Msgcore 3.5.0 / Targetcore 3.7.0): the
+// constant this test used to carry (payload + 2,082) was the heap's slack, and
+// M1 removed the slack - so the sizes below follow whatever the structure
+// really costs, which is the number the header says no application could know.
+static int FrameOverhead(P2PaddrSTR src, P2PaddrSTR dst)
+{
+    const int nProbe = 30000;
+    std::vector<char> v((size_t)nProbe, 'A');
+    P2PeerMsg32 oMsg(src, dst, P2Pmsg_BCast, &v[0], (P2Psize_t)nProbe);
+    oMsg.TrimP2Piomage();
+    oMsg.PrepareP2Piomage(~(DWORD)0);
+    const int nFrame = (int)oMsg.P2PiomageSize();
+    oMsg.ReleaseP2Piomage();
+    return nFrame - nProbe;
+}
+
 // One mode. Returns the exit code for it.
 static int RunMode(bool bCypher, short nPort)
 {
     const P2PaddrSTR kRoot = bCypher ? L"OverC"      : L"OverP";
     const P2PaddrSTR kLeaf = bCypher ? L"OverC.Leaf" : L"OverP.Leaf";
     const char* tag = bCypher ? "CYPHER" : "PLAIN";
-    const int kControl = 30600;
-    const int kOver    = bCypher ? 30680 : 31000;   // see the header for why
+    //  The receive limit (P2Peerio::m_dwMaxRecvSize). PLAIN goes 64 B over it.
+    //  CYPHER keeps the old case's shape: the PLAIN frame fits with 6 B to
+    //  spare (old: 32,762), and the cypher's nonce + tag (28 B) do not
+    const int kMaxFrame = 32768;
+    const int nOverhead = FrameOverhead(kLeaf, kRoot);
+    const int kControl  = kMaxFrame - nOverhead - 64;
+    const int kOver     = bCypher ? kMaxFrame - nOverhead - 6
+                                  : kMaxFrame - nOverhead + 64;
+    std::printf("[oversize] %s: frame overhead %d B over the payload (was ~2,082 before M1)\n",
+                tag, nOverhead);
 
     std::printf("\n--- mode %s, port %d: control %d B, oversized %d B ---\n",
                 tag, (int)nPort, kControl, kOver);
