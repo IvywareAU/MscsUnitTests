@@ -1901,6 +1901,55 @@ static void Test_UndeliverableReportBounded()
             delete pReport;
         }
     }
+
+    // Targetcore 3.7.1 (p2p_performance.md M6): the report quotes the message's
+    // LIVE bytes. The embedded image is the message's heap, and since Msgcore
+    // 3.5.1 a heap doubles when it grows, so untrimmed it carried up to half
+    // its size in free space. The embedded image's length is read off the image
+    // itself (P2Piomage_Sizeof, its oSync length): NOT through UnwrapFactory,
+    // whose copy is built in a heap with room to spare (measured 4,896 bytes
+    // for an 843-byte image).
+    TF_CASE("a report embeds the message trimmed, not its whole heap")
+    {
+        auto ArenaOf = [](P2PeerMsg& m) {
+            m.PrepareP2Piomage(~(DWORD)0);
+            const UINT n = m.P2PiomageSize();
+            m.ReleaseP2Piomage();
+            return n;
+        };
+        static const int kPayload = 256;
+        std::vector<char> vPayload((size_t)kPayload, 'C');
+        P2PeerMsg32 oMsg(L"BigReport.Src", L"BigReport.Dst", P2Pmsg_BCast,
+                         &vPayload[0], (P2Psize_t)kPayload);
+        const UINT nHeap = ArenaOf(oMsg);
+
+        P2Pevent* pEVT = EVERR->MODULE
+                              ->Message_T("Message not deliverable")
+                              ->HResult(P2Pevent_UNDELIVERABLE)
+                              ->Group("P2P");
+        P2PeerMsg* pReport = oMsg.ExceptionFactory(pEVT);
+        pEVT->Cancel();
+        TF_CHECK(pReport != nullptr);
+        if (pReport)
+        {
+            const UINT nLive = ArenaOf(oMsg);      // the factory trimmed it
+            TF_CHECK(nLive < nHeap);
+            TF_CHECK(pReport->IsWrapped());
+            const P2Piomage* pEmbedded = (const P2Piomage*)
+                pReport->r_item(VBLockBSTR_WRP).r_data().c_vBlob();
+            const UINT nEmbedded = P2Piomage_Sizeof(pEmbedded);
+            TF_CHECK_EQ(nEmbedded, nLive);
+            P2PeerMsg* pBack = pReport->UnwrapFactory();
+            TF_CHECK(pBack != nullptr);
+            if (pBack)
+            {
+                TF_CHECK_EQ((int)pBack->DataSize(), kPayload);
+                printf("    [M6] embedded message: %u -> %u bytes\n", nHeap, nEmbedded);
+                delete pBack;
+            }
+            delete pReport;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

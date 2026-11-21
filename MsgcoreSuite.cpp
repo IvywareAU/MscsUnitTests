@@ -2736,6 +2736,77 @@ static void Test_WireTrim()
 }
 
 // ---------------------------------------------------------------------------
+//  M6 (p2p_performance.md, Msgcore 3.5.1): a message heap that must grow
+//  doubles, where it added a fifth. The arena is read through the full-
+//  replica image, which is the heap itself; its length is the arena
+static VBLsize
+ArenaOf ( P3PmsgBSTR& oMsg )
+{
+    oMsg.PrepareP2Piomage ( ~(DWORD)0 );
+    const VBLsize n = oMsg.P2PiomageSize ( );
+    oMsg.ReleaseP2Piomage ( );
+    return n;
+}
+
+static void Test_ArenaGrowth()
+{
+    TF_CASE("M6: a message heap that runs out of room for a small field doubles")
+    {
+        P3PmsgBSTR oMsg ( VBLock_Addr32, 2048 );
+        P3PmsgItem& oRoot = oMsg.InitItem ( VBLockBSTR_MSG, P3PmsgData ( ) );
+        const VBLsize nBefore = ArenaOf ( oMsg );
+        VBLsize nAfter = nBefore;
+        int i = 0;
+        for ( ; i < 1000 && nAfter == nBefore; ++i )
+        {
+            wchar_t sz[16];
+            swprintf ( sz, 16, L"f%04d", i );
+            oRoot.DeclareItem ( sz, P3PmsgData ( i ) );
+            nAfter = ArenaOf ( oMsg );
+        }
+        TF_CHECK ( nAfter > nBefore );                // it did grow
+        TF_CHECK ( nAfter >= 2 * nBefore );           // by the whole arena, not a fifth
+        TF_CHECK ( nAfter <= 2 * nBefore + 64 );      // and not by more than that
+        TF_CHECK_EQ ( oRoot.SelectItem ( L"f0000" ).c_int ( ), 0 );
+        printf ( "    [M6] grew after %d fields: %u -> %u bytes\n"
+               , i, (UINT)nBefore, (UINT)nAfter );
+    }
+
+    TF_CASE("M6: building a message to 1 MB regrows a handful of times, not two dozen")
+    {
+        //  8 KB fields, so the allocation's own need never decides the step.
+        //  At a fifth it was 23 regrows; doubling from 2 KB to 1 MB is about 9
+        P3PmsgBSTR oMsg ( VBLock_Addr32, 2048 );
+        P3PmsgItem& oRoot = oMsg.InitItem ( VBLockBSTR_MSG, P3PmsgData ( ) );
+        const std::wstring sBig ( 4096, L'x' );
+        VBLsize nPrev = ArenaOf ( oMsg );
+        int nRegrows = 0;
+        for ( int i = 0; i < 128; ++i )
+        {
+            wchar_t sz[16];
+            swprintf ( sz, 16, L"f%04d", i );
+            oRoot.DeclareItem ( sz, P3PmsgData ( sBig.c_str ( ) ) );
+            const VBLsize nNow = ArenaOf ( oMsg );
+            if ( nNow > nPrev ) ++nRegrows;
+            nPrev = nNow;
+        }
+        TF_CHECK ( nPrev > 1000000 );
+        TF_CHECK ( nRegrows <= 10 );
+        TF_CHECK ( oRoot.SelectItem ( L"f0127" ).c_wstr ( ) == sBig );
+        //  The slack goes nowhere: trimmed, the image loses the free tail. What
+        //  stays is the live bytes plus the small tail each grow left behind
+        //  (under one field each, or the field would have fitted in it)
+        oMsg.TrimP2Piomage ( );
+        const VBLsize nTrimmed = ArenaOf ( oMsg );
+        TF_CHECK ( nTrimmed < nPrev );
+        TF_CHECK ( nTrimmed >= oMsg.Sizeof ( ) );
+        TF_CHECK ( nTrimmed - oMsg.Sizeof ( ) < (VBLsize)( nRegrows + 1 ) * 8400 );
+        printf ( "    [M6] 1 MB: %d regrows, arena %u, trimmed %u, used %u\n"
+               , nRegrows, (UINT)nPrev, (UINT)nTrimmed, (UINT)oMsg.Sizeof ( ) );
+    }
+}
+
+// ---------------------------------------------------------------------------
 void RunMsgcoreSuite()
 {
     Test_FieldAccess_F0Facts();
@@ -2764,4 +2835,5 @@ void RunMsgcoreSuite()
     Test_IOmageLayoutGeneration();
     Test_ReceivedImageReserialises();
     Test_WireTrim();
+    Test_ArenaGrowth();
 }

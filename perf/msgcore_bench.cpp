@@ -33,6 +33,8 @@
 //                   image for real in every build (P2Peerio.cpp:660). M2's
 //                   "trusted bit" moves this one.
 //   msg_new         the empty message: the fixed cost under build_flat.
+//   growth          the arena growth alone: build to 64 KB / 1 MB from 8 KB
+//                   fields, reporting regrows, bytes memcpy'd and slack (M6).
 //   lookup_repeat / lookup_alt / lookup_miss
 //                   SelectItem / Exists on a RECEIVED (adopted) message, the
 //                   heap every handler reads. lookup_repeat asks for the same
@@ -309,6 +311,64 @@ namespace
     }
 
     // ---------------------------------------------------------------------
+    //  growth: the arena growth on its own (B2x "growth isolated", plan
+    //  §3.1a, which M6 is sized from). Few fields of 8 KB each, so the O(n^2)
+    //  sibling insert build_flat measures stays out of it: 8 fields to 64 KB,
+    //  128 to 1 MB. The arena is read through the full-replica image, which is
+    //  the heap itself (no copy), after every field; a grow is the arena
+    //  getting bigger, and what it memcpy'd is the arena it left. A single
+    //  allocation that grows twice (F10's bound) counts once - the probe sees
+    //  the result, not the passes. Timed separately, without the probe.
+    size_t ArenaBytes ( P3PmsgBSTR &b )
+    {
+        b.PrepareP2Piomage ( ~(DWORD)0 );
+        size_t n = b.P2PiomageSize ( );
+        b.ReleaseP2Piomage ( );
+        return n;
+    }
+
+    void BenchGrowth ( )
+    {
+        const std::wstring big ( 4096, L'x' );      // 8 KB of UTF-16 a field
+        const struct { const char *label; int fields; } kCase[] = {
+            { "64KB", 8 }, { "1MB", 128 } };
+        for ( const auto &c : kCase )
+        {
+            size_t regrows = 0, copied = 0, arena = 0, used = 0;
+            bool ok = Guard ( [&] {
+                Msg m = NewMsg ( );
+                size_t prev = ArenaBytes ( *m.bstr );
+                for ( int i = 0; i < c.fields; ++i )
+                {
+                    m.root->DeclareItem ( Name ( i ).c_str ( ), P3PmsgData ( big.c_str ( ) ) );
+                    size_t now = ArenaBytes ( *m.bstr );
+                    if ( now > prev ) { ++regrows; copied += prev; }
+                    prev = now;
+                }
+                arena = prev;
+                used  = m.bstr->Sizeof ( );
+                return m.root->SelectItem ( Name ( c.fields - 1 ).c_str ( ) ).c_wstr ( ) == big;
+            } );
+            if ( !ok ) { Emit ( "growth", c.label, { {}, -1, -1, false } ); continue; }
+
+            auto r = perf::TimeOp ( [&] {
+                return Guard ( [&] {
+                    Msg m = NewMsg ( );
+                    for ( int i = 0; i < c.fields; ++i )
+                        m.root->DeclareItem ( Name ( i ).c_str ( ), P3PmsgData ( big.c_str ( ) ) );
+                    return m.bstr->Sizeof ( ) > 0;
+                } );
+            }, Batch ( c.fields <= 8 ? 200 : 4 ), kReps );
+            char note[160];
+            std::snprintf ( note, sizeof note,
+                            "regrows=%zu copied=%zu B (%.1fx used) arena=%zu used=%zu (%.0f%% slack)",
+                            regrows, copied, used ? (double)copied / used : 0.0, arena, used,
+                            arena ? 100.0 * ( arena - used ) / arena : 0.0 );
+            Emit ( "growth", c.label, r, "ns/msg", note );
+        }
+    }
+
+    // ---------------------------------------------------------------------
     void BenchVect ( )
     {
         for ( int n : kN )
@@ -435,6 +495,7 @@ int main ( int argc, char **argv )
 
     BenchBuild ( );
     BenchWire ( );
+    BenchGrowth ( );
     BenchVect ( );
     BenchCApi ( );
 
