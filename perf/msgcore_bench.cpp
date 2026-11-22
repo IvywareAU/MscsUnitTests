@@ -45,6 +45,18 @@
 //                   MsgFieldRef on the last field: re-resolves the path per op
 //                   (M5's target).
 //   vect_walk       P3PmsgVect r_data(i) over 0..N-1, ns per ELEMENT.
+//   B2x (P0b, §3.1a), added 2026-11-22:
+//   exists_hit_alt  Exists on a present name, first/last alternating, beside
+//                   lookup_miss
+//   handler_read    8 of N fields read on a received message in declaration
+//                   order, reversed and shuffled
+//   wstr_set/get    a WSTR of 8 / 64 / 1,024 units
+//   blob_set/get    64 B and 4 KB, c_vBlob / c_vBlobCopy
+//   list_append / list_walk (ns per element), list_fill_drophead
+//   attr_declare / attr_read  8 @attributes on one field
+//   drop_rebuild    delete every other field and declare them again; the note
+//                   says whether the arena grew (the free list's reuse)
+//   heap_copy       the P3PmsgBSTR copy constructor, the replica path
 //   capi_mgr        msgcore_mgr_create_nn + msgcore_mgr_destroy (the flat C
 //                   ABI every non-C++ consumer enters through).
 //
@@ -74,6 +86,8 @@
 #include "P2Pmsg.h"
 #include "P2PmsgBSTR.h"
 #include "MsgVect.h"
+#include "MsgList.h"
+#include "MsgAttr.h"
 #include "Msgexception.h"
 #include "MsgFieldRef.hpp"
 #include "Msgcore_c.h"
@@ -299,6 +313,13 @@ namespace
             auto r3 = perf::TimeOp ( [&] { return Guard ( [&] {
                 return !root->Exists ( L"absent" ); } ); }, lb, kReps );
             Emit ( "lookup_miss", std::to_string ( n ), r3 );
+            //  B2x (P0b): Exists on a PRESENT name, beside the miss. First and
+            //  last alternate, as lookup_alt does, so the cursor cannot answer.
+            auto r3h = perf::TimeOp ( [&] { return Guard ( [&] {
+                flip = !flip;
+                return root->Exists ( flip ? Name ( 0 ).c_str ( ) : last.c_str ( ) ) ? true : false; } ); },
+                lb, kReps );
+            Emit ( "exists_hit_alt", std::to_string ( n ), r3h );
 
             // MsgFieldRef on the last field: one full path resolution per op.
             auto rr = perf::TimeOp ( [&] { return Guard ( [&] {
@@ -404,6 +425,175 @@ namespace
     }
 
     // ---------------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    //  B2x (P0b, p2p_performance.md §3.1a): what B2 left out. Every case is
+    //  on the C++ classes; B9 takes the same operations up the layers.
+    void BenchB2x ( )
+    {
+        // Handler read pattern: k = 8 fields of N on a RECEIVED message, in
+        // declaration order, reversed, and in a fixed shuffled order. One op
+        // is the 8 reads. B2's repeat/alt cases bracket this; a handler that
+        // reads its fields is this case.
+        for ( int n : { 64, 512 } )
+        {
+            Msg m = NewMsg ( );
+            Fill ( *m.root, n );
+            std::vector<char> img = Image ( *m.bstr );
+            std::unique_ptr<P3PmsgBSTR> in;
+            P3PmsgItem *root = nullptr;
+            if ( !Guard ( [&] { in = Adopt ( img ); root = &in->r_item ( VBLockBSTR_MSG ); return true; } ) )
+            { Emit ( "handler_read", std::to_string ( n ), { {}, -1, -1, false } ); continue; }
+            const int k = 8;
+            int fwd[k], rev[k], shuf[k];
+            const int kShuf[k] = { 5, 1, 7, 3, 0, 6, 2, 4 };
+            for ( int i = 0; i < k; ++i ) fwd[i] = i * n / k + n / ( 2 * k );
+            for ( int i = 0; i < k; ++i ) rev[i] = fwd[k - 1 - i];      // after fwd is whole
+            for ( int i = 0; i < k; ++i ) shuf[i] = fwd[ kShuf[i] ];
+            struct Order { const char *label; const int *idx; };
+            for ( const Order &o : { Order{ "fwd", fwd }, Order{ "rev", rev }, Order{ "random", shuf } } )
+            {
+                auto r = perf::TimeOp ( [&] { return Guard ( [&] {
+                    int sum = 0, want = 0;
+                    for ( int i = 0; i < k; ++i )
+                    {
+                        sum  += root->SelectItem ( Name ( o.idx[i] ).c_str ( ) ).c_int ( );
+                        want += o.idx[i];
+                    }
+                    return sum == want; } ); }, Batch ( n <= 64 ? 2000 : 200 ), kReps );
+                Emit ( "handler_read", std::to_string ( n ) + "/" + o.label, r, "ns/8reads" );
+            }
+        }
+
+        // Strings: set and get a WSTR of 8 / 64 / 1,024 units. Linux widens
+        // UTF-16 to wchar_t on the get (the c_wstr ring); Windows does not.
+        for ( int u : { 8, 64, 1024 } )
+        {
+            Msg m = NewMsg ( );
+            std::wstring s ( (size_t)u, L'x' ), t ( (size_t)u, L'y' );
+            bool ok = Guard ( [&] { m.root->DeclareItem ( L"s", P3PmsgData ( s.c_str ( ) ) ); return true; } );
+            P3PmsgField *f = nullptr;
+            ok = ok && Guard ( [&] { f = &m.root->SelectItem ( L"s" ); return true; } );
+            bool flip = false;
+            auto rs = perf::TimeOp ( [&] { return ok && Guard ( [&] {
+                flip = !flip;
+                f->r_data ( ) = P3PmsgData ( ( flip ? t : s ).c_str ( ) );
+                return true; } ); }, Batch ( 2000 ), kReps );
+            Emit ( "wstr_set", std::to_string ( u ), rs );
+            auto rg = perf::TimeOp ( [&] { return ok && Guard ( [&] {
+                return std::wcslen ( f->c_wstr ( ) ) == (size_t)u; } ); }, Batch ( 2000 ), kReps );
+            Emit ( "wstr_get", std::to_string ( u ), rg );
+        }
+
+        // Blobs: set and copy out 64 B and 4 KB
+        for ( int b : { 64, 4096 } )
+        {
+            Msg m = NewMsg ( );
+            std::vector<unsigned char> src ( (size_t)b, 0x5A ), out ( (size_t)b );
+            bool ok = Guard ( [&] {
+                m.root->DeclareItem ( L"b", P3PmsgData ( (const void *)src.data ( ), (size_t)b, VBLockData_BLOB16 ) );
+                return true; } );
+            P3PmsgField *f = nullptr;
+            ok = ok && Guard ( [&] { f = &m.root->SelectItem ( L"b" ); return true; } );
+            auto rs = perf::TimeOp ( [&] { return ok && Guard ( [&] {
+                f->r_data ( ).c_vBlob ( src.data ( ), (size_t)b );
+                return true; } ); }, Batch ( 2000 ), kReps );
+            Emit ( "blob_set", std::to_string ( b ) + "B", rs );
+            auto rg = perf::TimeOp ( [&] { return ok && Guard ( [&] {
+                f->r_data ( ).c_vBlobCopy ( out.data ( ), (size_t)b );
+                return out[ (size_t)b - 1 ] == 0x5A; } ); }, Batch ( 2000 ), kReps );
+            Emit ( "blob_get", std::to_string ( b ) + "B", rg );
+        }
+
+        // List: append N, walk N, DropHead until empty. ns per ELEMENT.
+        for ( int n : { 64, 512 } )
+        {
+            const long batch = n <= 64 ? 200 : 20;
+            auto ra = perf::TimeOp ( [&] { return Guard ( [&] {
+                P3PmsgList l;
+                for ( int i = 0; i < n; ++i ) l.AddListTail ( P3PmsgData ( i ) );
+                return (int)l.GetCount ( ) == n; } ); }, batch, kReps );
+            perf::OpResult pa = ra;
+            pa.ns.min /= n; pa.ns.p50 /= n; pa.ns.avg /= n; pa.ns.p99 /= n; pa.ns.max /= n;
+            if ( pa.cpuNsPerOp > 0 )  pa.cpuNsPerOp  /= n;
+            if ( pa.allocsPerOp > 0 ) pa.allocsPerOp /= n;
+            Emit ( "list_append", std::to_string ( n ), pa, "ns/elem" );
+
+            P3PmsgList l;
+            bool ok = Guard ( [&] { for ( int i = 0; i < n; ++i ) l.AddListTail ( P3PmsgData ( i ) ); return true; } );
+            auto rw = perf::TimeOp ( [&] { return ok && Guard ( [&] {
+                long long sum = 0;
+                VBLaddr pos = l.GetHeadPos ( );
+                while ( pos ) sum += l.GetNext ( pos ).c_int ( );
+                return sum == (long long)n * ( n - 1 ) / 2; } ); }, batch * 10, kReps );
+            perf::OpResult pw = rw;
+            pw.ns.min /= n; pw.ns.p50 /= n; pw.ns.avg /= n; pw.ns.p99 /= n; pw.ns.max /= n;
+            if ( pw.cpuNsPerOp > 0 )  pw.cpuNsPerOp  /= n;
+            if ( pw.allocsPerOp > 0 ) pw.allocsPerOp /= n;
+            Emit ( "list_walk", std::to_string ( n ), pw, "ns/elem" );
+
+            auto rd = perf::TimeOp ( [&] { return Guard ( [&] {
+                P3PmsgList d;
+                for ( int i = 0; i < n; ++i ) d.AddListTail ( P3PmsgData ( i ) );
+                while ( d.GetCount ( ) ) d.DropHead ( );
+                return true; } ); }, batch, kReps );
+            Emit ( "list_fill_drophead", std::to_string ( n ), rd, "ns/list",
+                   "append n then DropHead to empty; minus list_append x n = the drops" );
+        }
+
+        // Attributes: declare 8 @attributes on a field, then read them back
+        {
+            const int k = 8;
+            auto rdcl = perf::TimeOp ( [&] { return Guard ( [&] {
+                P3PmsgField f ( L"rec" );
+                P3PmsgAttr &a = f.r_Attr ( P3PmsgField::AttrCMD_Create );
+                for ( int i = 0; i < k; ++i ) a += P3PmsgField ( Name ( i ).c_str ( ), P3PmsgData ( i ) );
+                return f.r_Attr ( ).Exists ( Name ( k - 1 ).c_str ( ) ) ? true : false; } ); },
+                Batch ( 500 ), kReps );
+            Emit ( "attr_declare", "8", rdcl, "ns/8attrs", "field + 8 attributes" );
+
+            P3PmsgField f ( L"rec" );
+            bool ok = Guard ( [&] {
+                P3PmsgAttr &a = f.r_Attr ( P3PmsgField::AttrCMD_Create );
+                for ( int i = 0; i < k; ++i ) a += P3PmsgField ( Name ( i ).c_str ( ), P3PmsgData ( i ) );
+                return true; } );
+            auto rr = perf::TimeOp ( [&] { return ok && Guard ( [&] {
+                int sum = 0;
+                for ( int i = k - 1; i >= 0; --i ) sum += f.r_Attr ( ).SelectItem ( Name ( i ).c_str ( ) ).c_int ( );
+                return sum == k * ( k - 1 ) / 2; } ); }, Batch ( 2000 ), kReps );
+            Emit ( "attr_read", "8", rr, "ns/8reads" );
+        }
+
+        // Drop and rebuild: delete every other field of N, declare them again.
+        // One op is the whole churn; the note says whether the arena grew,
+        // i.e. whether the free list took the re-declares (it should).
+        for ( int n : { 64, 512 } )
+        {
+            Msg m = NewMsg ( );
+            Fill ( *m.root, n );
+            const VBLsize nBefore = m.bstr->Sizeof ( );
+            auto r = perf::TimeOp ( [&] { return Guard ( [&] {
+                for ( int i = 1; i < n; i += 2 ) m.root->Delete ( Name ( i ).c_str ( ) );
+                for ( int i = 1; i < n; i += 2 ) m.root->DeclareItem ( Name ( i ).c_str ( ), P3PmsgData ( i ) );
+                return m.root->SelectItem ( Name ( n - 1 ).c_str ( ) ).c_int ( ) == n - 1; } ); },
+                Batch ( n <= 64 ? 50 : 3 ), kReps );
+            char note[96];
+            std::snprintf ( note, sizeof note, "delete + redeclare n/2; arena %llu -> %llu B",
+                            (unsigned long long)nBefore, (unsigned long long)m.bstr->Sizeof ( ) );
+            Emit ( "drop_rebuild", std::to_string ( n ), r, "ns/churn", note );
+        }
+
+        // Heap copy: the copy constructor (the replica path) of an N-field message
+        for ( int n : { 64, 512 } )
+        {
+            Msg m = NewMsg ( );
+            Fill ( *m.root, n );
+            auto r = perf::TimeOp ( [&] { return Guard ( [&] {
+                P3PmsgBSTR32 c ( *m.bstr );
+                return c.Sizeof ( ) > 0; } ); }, Batch ( n <= 64 ? 200 : 10 ), kReps );
+            Emit ( "heap_copy", std::to_string ( n ), r, "ns/copy" );
+        }
+    }
+
     void BenchCApi ( )
     {
         auto r = perf::TimeOp ( [&] {
@@ -522,6 +712,7 @@ int main ( int argc, char **argv )
     BenchWire ( );
     BenchGrowth ( );
     BenchVect ( );
+    BenchB2x ( );
     BenchCApi ( );
 
     std::printf ( "%s: %s\n", kBench, g_fail ? "FAIL (a correctness check failed)" : "done" );

@@ -34,6 +34,8 @@
 #                     lookup / MsgFieldRef / Vect / C-API, swept over N fields
 #   B3 crypto_bench   every security-posture primitive, this platform's backend
 #   B5 perf_fanout    one hub x C connections; relay chains of H hops
+#   B8 msgstore_bench P2PmsgMgr as a store: populate / save / defrag / load
+#                     / path lookups / triggers at 64 KB, 1 MB, 16 MB (P0b)
 #
 # Still to come (§3.1): B4 linkcost Wsa + CPU column, B6 perf_payload, B7
 # cross-host run mode.
@@ -67,6 +69,19 @@ if(TARGET msgcore AND TARGET p2pplatform)
     target_link_libraries(msgcore_bench PRIVATE msgcore p2pplatform)
     add_test(NAME msgcore_bench COMMAND msgcore_bench 1)
     set_tests_properties(msgcore_bench PROPERTIES TIMEOUT 600 LABELS measure)
+
+    # B8 msgstore_bench (P0b, p2p_performance.md §3.1a) -- P2PmsgMgr as a
+    # store at 64 KB / 1 MB / 16 MB: populate, save, defragment, load, path
+    # lookups, triggers. Same link scope as msgcore_bench (P2PmsgMgr is in
+    # msgcore). Writes its files under the build tree and removes them. The
+    # registration stops at 1 MB to keep a measure run short; the 16 MB row is
+    # perf_run.py's job (no argument = all three).
+    add_executable(msgstore_bench msgstore_bench.cpp)
+    _mscs_test_common(msgstore_bench)
+    target_include_directories(msgstore_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(msgstore_bench PRIVATE msgcore p2pplatform)
+    add_test(NAME msgstore_bench COMMAND msgstore_bench 1024)
+    set_tests_properties(msgstore_bench PROPERTIES TIMEOUT 600 LABELS measure)
 endif()
 
 # B5 perf_fanout -- one topology per process (the hub limit, MAX_P2PmsgHub =
