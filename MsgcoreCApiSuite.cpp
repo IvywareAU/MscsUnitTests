@@ -750,6 +750,70 @@ static void Test_CApi_HandleGuards()
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// msgcore_field_child walks ONCE now (p2p_performance M11): it used to be
+// Exists() and then SelectItem(). Every answer the two-walk form gave is
+// pinned here -- a hit, a miss, a hit without case, a list or vect child
+// (null: SelectItem's field conversion refused one), the LAST of 512
+// siblings, and the same handle asked again and again in alternation.
+// ---------------------------------------------------------------------------
+static void Test_CApi_FieldChildOneWalk()
+{
+    TF_CASE("field_child: hit, miss, case, list/vect child, 512 siblings, repeats")
+    {
+        MsgMgrHandle hMgr = msgcore_mgr_create_nn(MSGCORE_ADDR_32, 4096, 1u << 22);
+        MsgFieldHandle hRoot = hMgr ? msgcore_mgr_root(hMgr) : nullptr;
+        TF_CHECK(hRoot != nullptr);
+        if (hRoot)
+        {
+            for (int i = 0; i < 512; ++i)
+            {
+                wchar_t sz[16]; swprintf(sz, 16, L"c%03d", i);
+                msgcore_field_destroy(msgcore_field_declare_int(hRoot, sz, i, 0));
+            }
+            msgcore_list_destroy(msgcore_field_declare_list(hRoot, L"L"));
+            msgcore_vect_destroy(msgcore_field_declare_vect(hRoot, L"V", 2, 5));
+
+            MsgFieldHandle h = msgcore_field_child(hRoot, L"c511");
+            TF_CHECK(h != nullptr && msgcore_field_get_int(h) == 511);
+            msgcore_field_destroy(h);
+
+            h = msgcore_field_child(hRoot, L"C007");
+            TF_CHECK(h != nullptr && msgcore_field_get_int(h) == 7);
+            msgcore_field_destroy(h);
+
+            TF_CHECK(msgcore_field_child(hRoot, L"nope") == nullptr);
+            TF_CHECK(msgcore_field_child(hRoot, L"") == nullptr);
+            TF_CHECK(msgcore_field_child(hRoot, L"L") == nullptr);
+            TF_CHECK(msgcore_field_child(hRoot, L"V") == nullptr);
+
+            bool bAll = true;
+            for (int r = 0; r < 200 && bAll; ++r)
+            {
+                int i = (r * 37) % 512;
+                wchar_t sz[16]; swprintf(sz, 16, L"c%03d", i);
+                MsgFieldHandle a = msgcore_field_child(hRoot, sz);
+                MsgFieldHandle m = msgcore_field_child(hRoot, L"missing");
+                MsgFieldHandle z = msgcore_field_child(hRoot, L"c000");
+                bAll = a && !m && z && msgcore_field_get_int(a) == i
+                    && msgcore_field_get_int(z) == 0;
+                msgcore_field_destroy(a); msgcore_field_destroy(z);
+            }
+            TF_CHECK(bAll);
+
+            // The handle aliases the heap: a write through it is seen fresh.
+            h = msgcore_field_child(hRoot, L"c100");
+            if (h) msgcore_field_set_int(h, 4242);
+            msgcore_field_destroy(h);
+            h = msgcore_field_child(hRoot, L"c100");
+            TF_CHECK(h != nullptr && msgcore_field_get_int(h) == 4242);
+            msgcore_field_destroy(h);
+        }
+        msgcore_field_destroy(hRoot);
+        msgcore_mgr_destroy(hMgr);
+    }
+}
+
 void RunMsgcoreCApiSuite()
 {
     Test_CApi_TypeNames();
@@ -763,4 +827,5 @@ void RunMsgcoreCApiSuite()
     Test_CApi_RetypeChild();
     Test_CApi_TriggerSink();
     Test_CApi_HandleGuards();
+    Test_CApi_FieldChildOneWalk();
 }
