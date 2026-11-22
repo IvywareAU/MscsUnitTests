@@ -2807,6 +2807,114 @@ static void Test_ArenaGrowth()
 }
 
 // ---------------------------------------------------------------------------
+//  M7 (p2p_performance.md, Msgcore 3.5.2): InitItem appends an absent skeleton
+//  item in place (P2PmsgDesc_AppendField) instead of building a temporary
+//  field and copying it. The claim is that it is the SAME block, byte for
+//  byte, so this builds one message each way and compares the images whole:
+//  every addressing width, every value shape the skeleton carries (empty,
+//  scalars, short and long wide strings, a narrow and an 8-bit-length string,
+//  small and large blobs, one that grows the heap), a child under Net, and an item
+//  replaced after it exists.
+static std::vector<char>
+ImageBytes ( P3PmsgBSTR& oMsg )
+{
+    oMsg.PrepareP2Piomage ( ~(DWORD)0 );
+    const UINT n = oMsg.P2PiomageSize ( );
+    const char *p = (const char *)oMsg.P2Piomage ( );
+    std::vector<char> v ( p, p + n );
+    oMsg.ReleaseP2Piomage ( );
+    return v;
+}
+
+static void Test_SkeletonFastPath()
+{
+    static char aBlob [ 3000 ];
+    for ( int i = 0; i < (int)sizeof(aBlob); i++ ) aBlob[i] = (char)(i * 7 + 1);
+    static const std::wstring sLong ( 300, L'w' );
+    struct Value { const char *label; P3PmsgData (*make)(); };
+    const Value kValues[] = {
+        { "empty",      [] { return P3PmsgData ( ); } },
+        { "int32",      [] { return P3PmsgData ( (INT32)-7 ); } },
+        { "uint32",     [] { return P3PmsgData ( (UINT32)7u ); } },
+        { "int64",      [] { return P3PmsgData ( (INT64)0x123456789LL ); } },
+        { "double",     [] { return P3PmsgData ( 1.5 ); } },
+        { "wstr",       [] { return P3PmsgData ( L"A.B.C" ); } },
+        { "wstr300",    [] { return P3PmsgData ( sLong.c_str ( ) ); } },
+        { "bstr16",     [] { return P3PmsgData ( "narrow" ); } },
+        { "wstr08",     [] { return P3PmsgData ( L"eight", 0, VBLockData_WSTR08 ); } },
+        { "blob08",     [] { return P3PmsgData ( (const void *)aBlob, 10, VBLockData_BLOB08 ); } },
+        { "blob16",     [] { return P3PmsgData ( (const void *)aBlob, 300, VBLockData_BLOB16 ); } },
+        { "blob3000",   [] { return P3PmsgData ( (const void *)aBlob, 3000, VBLockData_BLOB16 ); } },
+    };
+    const UCHAR kWidths[] = { VBLock_Addr16, VBLock_Addr32, VBLock_Addr64 };
+
+    TF_CASE("M7: InitItem's in-place append builds the image the generic append builds, byte for byte")
+    {
+        int nCompared = 0, nDiffer = 0;
+        for ( UCHAR uWidth : kWidths )
+          for ( const Value& v : kValues )
+          {
+            std::vector<char> vFast, vSlow;
+            try
+            {
+                P3PmsgBSTR oFast ( uWidth, 2048 );
+                oFast.InitItem ( VBLockBSTR_NET, P3PmsgData ( ) );
+                oFast.r_item ( VBLockBSTR_NET ).DeclareItem ( L"Src", P3PmsgData ( L"Peer.A" ) );
+                oFast.InitItem ( VBLockBSTR_MSG, v.make ( ) );
+                oFast.InitItem ( VBLockBSTR_EVT, P3PmsgData ( (INT32)5 ) );
+                oFast.InitItem ( VBLockBSTR_MSG, P3PmsgData ( (INT32)9 ) );   // replace
+                vFast = ImageBytes ( oFast );
+
+                P3PmsgBSTR oSlow ( uWidth, 2048 );
+                P3PmsgItem& oRoot = oSlow.r_item ( VBLockBSTR_ROOT );
+                oRoot += P3PmsgItem ( L"Net", P3PmsgData ( ) );
+                oSlow.r_item ( VBLockBSTR_NET ).DeclareItem ( L"Src", P3PmsgData ( L"Peer.A" ) );
+                oRoot += P3PmsgItem ( L"Msg", v.make ( ) );
+                oRoot += P3PmsgItem ( L"Evt", P3PmsgData ( (INT32)5 ) );
+                oSlow.r_item ( VBLockBSTR_MSG ).r_data ( ) = P3PmsgData ( (INT32)9 );
+                vSlow = ImageBytes ( oSlow );
+            }
+            catch ( P2Pevent *pEVT )
+            {
+                if ( pEVT ) pEVT->Cancel ( false );
+                printf ( "    [M7] width %u %s: threw\n", (UINT)uWidth, v.label );
+                ++nDiffer;
+                continue;
+            }
+            ++nCompared;
+            if ( vFast != vSlow )
+            {
+                ++nDiffer;
+                size_t i = 0;
+                while ( i < vFast.size ( ) && i < vSlow.size ( ) && vFast[i] == vSlow[i] ) ++i;
+                printf ( "    [M7] width %u %s: %zu vs %zu bytes, first difference at %zu\n"
+                       , (UINT)uWidth, v.label, vFast.size ( ), vSlow.size ( ), i );
+            }
+          }
+        TF_CHECK_EQ ( nDiffer, 0 );
+        TF_CHECK_EQ ( nCompared, (int)( sizeof(kWidths) * ( sizeof(kValues) / sizeof(kValues[0]) ) ) );
+        printf ( "    [M7] %d images compared, %d differ\n", nCompared, nDiffer );
+    }
+
+    TF_CASE("M7: the in-place item reads back, and the message adopts on the wire")
+    {
+        P3PmsgBSTR oMsg ( VBLock_Addr32, 2048 );
+        oMsg.InitItem ( VBLockBSTR_NET, P3PmsgData ( ) );
+        P3PmsgItem& oMsgItem = oMsg.InitItem ( VBLockBSTR_MSG, P3PmsgData ( (const void *)aBlob, 300, VBLockData_BLOB16 ) );
+        TF_CHECK_EQ ( (int)oMsgItem.r_data ( ).c_size ( ), 300 );
+        TF_CHECK ( memcmp ( oMsgItem.r_data ( ).c_vBlob ( ), aBlob, 300 ) == 0 );
+        TF_CHECK ( oMsg.Exists ( VBLockBSTR_NET ) );
+        TF_CHECK ( oMsg.Exists ( VBLockBSTR_MSG ) );
+        TF_CHECK ( !oMsg.Exists ( VBLockBSTR_EVT ) );
+        oMsg.TrimP2Piomage ( );
+        VBLsize n = 0;
+        char *p = WireCopy ( oMsg, n );
+        TF_CHECK ( AdoptsOnWire ( p, n, VBLockBSTR_MSG, VBLockBSTR_NET ) );
+        delete [] p;
+    }
+}
+
+// ---------------------------------------------------------------------------
 void RunMsgcoreSuite()
 {
     Test_FieldAccess_F0Facts();
@@ -2836,4 +2944,5 @@ void RunMsgcoreSuite()
     Test_ReceivedImageReserialises();
     Test_WireTrim();
     Test_ArenaGrowth();
+    Test_SkeletonFastPath();
 }

@@ -59,6 +59,7 @@
 //
 // Usage: msgcore_bench [scale]   scale multiplies every batch (default 1).
 //        msgcore_bench --profile [local_]lookup_alt|lookup_miss|fieldref_read [seconds] [n]
+//        msgcore_bench --profile msg_new|heap_only [seconds]
 //        (local_: on the message as built, not as received -- the trusted-bit heap)
 //                                one case in a loop, for a profiler.
 // Exit: 0 ran, 1 a correctness check failed. Never a timing verdict.
@@ -180,6 +181,12 @@ namespace
             return Guard ( [&] { Msg m = NewMsg ( ); return m.root != nullptr; } );
         }, Batch ( 2000 ), kReps );
         Emit ( "msg_new", "empty", r0, "ns/msg" );
+        //  M7: the same without the MSG item - the heap and its root alone, so
+        //  the item's share of msg_new is the difference
+        auto r0h = perf::TimeOp ( [&] {
+            return Guard ( [&] { P3PmsgBSTR32 b; return b.Sizeof ( ) > 0; } );
+        }, Batch ( 2000 ), kReps );
+        Emit ( "msg_new", "heap_only", r0h, "ns/msg" );
 
         for ( int n : kN )
         {
@@ -420,6 +427,24 @@ namespace
     //  bounds. Without the prefix the heap is adopted and keeps every check.
     int Profile ( const char *kase, double seconds, int n )
     {
+        //  M7: the empty message on its own, create + destroy per op
+        if ( std::strcmp ( kase, "msg_new" ) == 0 || std::strcmp ( kase, "heap_only" ) == 0 )
+        {
+            const bool bItem = std::strcmp ( kase, "msg_new" ) == 0;
+            auto t0 = std::chrono::steady_clock::now ( );
+            long long ops = 0;
+            bool ok = true;
+            while ( std::chrono::duration<double> ( std::chrono::steady_clock::now ( ) - t0 ).count ( ) < seconds )
+                for ( int i = 0; i < 64; ++i, ++ops )
+                {
+                    if ( bItem ) { Msg m = NewMsg ( ); ok &= m.root != nullptr; }
+                    else         { P3PmsgBSTR32 b; ok &= b.Sizeof ( ) > 0; }
+                }
+            double s = std::chrono::duration<double> ( std::chrono::steady_clock::now ( ) - t0 ).count ( );
+            std::printf ( "profile %s: %lld ops in %.2f s = %.0f ns/op\n", kase, ops, s, s * 1e9 / (double)ops );
+            return ok ? 0 : 1;
+        }
+
         Msg m = NewMsg ( );
         Fill ( *m.root, n );
         std::vector<char> img = Image ( *m.bstr );
