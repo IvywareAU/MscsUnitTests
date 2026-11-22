@@ -2915,8 +2915,163 @@ static void Test_SkeletonFastPath()
 }
 
 // ---------------------------------------------------------------------------
+// A CURSOR LEFT ON A CHILD FREED THROUGH ANOTHER OBJECT (3.6.0).
+// Two P3PmsgField objects over one node have two descendant cursors. Before
+// 3.6.0 a child deleted through f2 was freed under f1's cursor, whose quick
+// test then read the freed block's name and threw -- for EVERY name asked
+// through f1 -- until the block happened to be reused. The quick test now
+// asks P3PmsgCurs::StillHere first (MsgCurs.cpp, GotoQuick_StillHere).
+// Found by the p2p_performance M5 review, 2026-11-22.
+// ---------------------------------------------------------------------------
+static bool StaleThrows ( const std::function<void()>& f )
+{
+    try { f(); return false; }
+    catch ( P2Pevent* pEVT ) { if ( pEVT ) pEVT->Cancel(false); return true; }
+}
+
+static void Test_Curs_StaleAfterForeignDelete()
+{
+    TF_CASE("cursor: a child freed through another object is not believed")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        for ( int i = 0; i < 8; ++i )
+        { wchar_t sz[8]; swprintf ( sz, 8, L"c%03d", i ); m.DeclareItem ( sz, P3PmsgData(i) ); }
+        P3PmsgField f1 ( m.r_Object() ), f2 ( m.r_Object() );
+
+        // deleted: absent, and the next lookups through f1 neither throw nor miss
+        TF_CHECK_EQ ( f1.SelectItem(L"c005").c_int(), 5 );
+        TF_CHECK ( f2.Delete(L"c005") );
+        bool bVoid = false;
+        TF_CHECK ( !StaleThrows ( [&]{ bVoid = f1.r_Desc().SelectObject(L"c005").IsVoid(); } ) );
+        TF_CHECK ( bVoid );
+        int n6 = -1;
+        TF_CHECK ( !StaleThrows ( [&]{ n6 = f1.SelectItem(L"c006").c_int(); } ) );
+        TF_CHECK_EQ ( n6, 6 );
+
+        // the freed block taken at once by a same-named item under ANOTHER parent
+        //  sub gets a child first, so its descendant block exists and the one
+        //  allocation the declare below makes is the item -- the same size as
+        //  the freed c004, so the head of the free list fits it. Checked: the
+        //  case is meaningless unless the block really was reused.
+        f2.r_Desc().DeclareItem ( L"sub", P3PmsgData(0), FALSE );
+        P3PmsgField fsub ( f2.r_Desc().SelectObject(L"sub") );
+        fsub.r_Desc().DeclareItem ( L"pad", P3PmsgData(0), FALSE );
+        TF_CHECK_EQ ( f1.SelectItem(L"c004").c_int(), 4 );
+        const P2Pos posOld = f1.SelectItem(L"c004").GetP2Pos();
+        TF_CHECK ( f2.Delete(L"c004") );
+        fsub.r_Desc().DeclareItem ( L"c004", P3PmsgData(444), FALSE );
+        TF_CHECK ( fsub.SelectItem(L"c004").GetP2Pos() == posOld );   // reused
+        bVoid = false;
+        TF_CHECK ( !StaleThrows ( [&]{ bVoid = f1.r_Desc().SelectObject(L"c004").IsVoid(); } ) );
+        TF_CHECK ( bVoid );
+
+        // deleted and declared again through f2: f1 finds the new one
+        TF_CHECK_EQ ( f1.SelectItem(L"c003").c_int(), 3 );
+        TF_CHECK ( f2.Delete(L"c003") );
+        f2.r_Desc().DeclareItem ( L"c003", P3PmsgData(333), FALSE );
+        int n3 = -1;
+        TF_CHECK ( !StaleThrows ( [&]{ n3 = f1.SelectItem(L"c003").c_int(); } ) );
+        TF_CHECK_EQ ( n3, 333 );
+
+        // by index too
+        TF_CHECK ( f1.r_Desc().r_Curs().Goto(0) );
+        TF_CHECK ( f2.Delete(L"c000") );
+        bool bGo = false;
+        TF_CHECK ( !StaleThrows ( [&]{ bGo = f1.r_Desc().r_Curs().Goto(0); } ) );
+        TF_CHECK ( bGo && f1.r_Desc().r_Curs().r_item().r_name().c_wcsicmp(L"c001") == 0 );
+    }
+
+    TF_CASE("cursor: IsAt answers from where the cursor stands, and never moves it")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        for ( int i = 0; i < 8; ++i )
+        { wchar_t sz[8]; swprintf ( sz, 8, L"c%03d", i ); m.DeclareItem ( sz, P3PmsgData(i) ); }
+        P3PmsgField f1 ( m.r_Object() ), f2 ( m.r_Object() );
+        P3PmsgField& r = f1.SelectItem ( L"c006" );
+        P3PmsgCurs&  c = f1.r_Desc().r_Curs();
+        TF_CHECK ( c.IsAt(L"c006") );
+        TF_CHECK ( c.IsAt(L"C006") );            // as Goto: case does not matter
+        TF_CHECK ( !c.IsAt(L"c007") );           // present, but not where it stands
+        TF_CHECK ( !c.IsAt(L"nope") );
+        TF_CHECK ( r.r_name().c_wcsicmp(L"c006") == 0 );   // not moved by any of them
+        TF_CHECK ( f2.Delete(L"c006") );
+        TF_CHECK ( !c.IsAt(L"c006") );           // freed under it
+
+        // A SYSTEM heap (a standalone field) cannot be looked at: never vouched for
+        P3PmsgField oRoot ( L"Root" );
+        oRoot.DeclareItem ( L"a", P3PmsgData(1) );
+        TF_CHECK_EQ ( oRoot.SelectItem(L"a").c_int(), 1 );
+        TF_CHECK ( !oRoot.r_Desc().r_Curs().IsAt(L"a") );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M5 (3.6.0): MsgFieldRef's read asks the parent's cursor before the fresh
+// walk (MsgFieldRef.hpp, Has). Every answer the walk gave, pinned: repeated
+// and alternating reads, nested paths, 512 siblings, after a write, after a
+// delete through another object, a name with a path delimiter, and that a
+// HELD cursor reference is not moved by an Exists() that misses or that hits
+// another name -- Exists() never moved one, and still does not.
+// ---------------------------------------------------------------------------
+static void Test_FieldRef_CursorFirst()
+{
+    TF_CASE("MsgFieldRef: reads ask the cursor first, with the walk's answers")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        for ( int i = 0; i < 512; ++i )
+        { wchar_t sz[8]; swprintf ( sz, 8, L"c%03d", i ); m.DeclareItem ( sz, P3PmsgData(i) ); }
+        P3PmsgField f1 ( m.r_Object() ), f2 ( m.r_Object() );
+
+        bool bAll = true;
+        for ( int k = 0; k < 50; ++k )
+          bAll = bAll && Field(f1, L"c511").AsInt() == 511;
+        TF_CHECK ( bAll );
+        bAll = true;
+        for ( int k = 0; k < 50; ++k )
+          bAll = bAll && Field(f1, L"c000").AsInt() == 0 && Field(f1, L"c511").AsInt() == 511
+                      && Field(f1, L"C255").AsInt() == 255;
+        TF_CHECK ( bAll );
+
+        Field(f1, L"c100") = 4242;
+        TF_CHECK_EQ ( Field(f1, L"c100").AsInt(), 4242 );
+        Field(f1, L"c100") = L"text now";
+        TF_CHECK ( Field(f1, L"c100").AsText() == L"text now" );
+
+        // nested: g.r.v, read again and again, and a sibling path between
+        Field(f1, L"g")[L"r"][L"v"] = 7;
+        Field(f1, L"g")[L"q"][L"v"] = 8;
+        bAll = true;
+        for ( int k = 0; k < 20; ++k )
+          bAll = bAll && Field(f1, L"g")[L"r"][L"v"].AsInt() == 7
+                      && Field(f1, L"g")[L"q"][L"v"].AsInt() == 8;
+        TF_CHECK ( bAll );
+
+        // Exists, hit and miss, and deleted through the other object
+        TF_CHECK ( Field(f1, L"c200").Exists() );
+        TF_CHECK ( !Field(f1, L"nope").Exists() );
+        TF_CHECK_EQ ( Field(f1, L"c300").AsInt(), 300 );
+        TF_CHECK ( f2.Delete(L"c300") );
+        TF_CHECK ( !Field(f1, L"c300").Exists() );
+        TF_CHECK ( StaleThrows ( [&]{ (void)Field(f1, L"c300").AsInt(); } ) );
+        TF_CHECK ( !Field(f1, L"g")[L"x"].Exists() );
+        TF_CHECK ( !Field(f1, L"none")[L"v"].Exists() );
+
+        // a name with a path delimiter is never peeked: the resolver answers
+        TF_CHECK ( Field(f1, L"g.r").Exists() == f1.Exists(L"g.r") );
+
+        // a HELD cursor reference stays where it was
+        P3PmsgField& r = f1.SelectItem ( L"c001" );
+        TF_CHECK ( !Field(f1, L"nope").Exists() );
+        TF_CHECK ( Field(f1, L"c002").Exists() );
+        TF_CHECK ( r.r_name().c_wcsicmp(L"c001") == 0 );
+        TF_CHECK_EQ ( r.c_int(), 1 );
+    }
+}
+
 void RunMsgcoreSuite()
 {
+    Test_Curs_StaleAfterForeignDelete();
+    Test_FieldRef_CursorFirst();
     Test_FieldAccess_F0Facts();
     Test_FieldRef_Typed();
     Test_FieldRef_Bytes();

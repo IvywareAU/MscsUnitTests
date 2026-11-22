@@ -814,6 +814,92 @@ static void Test_CApi_FieldChildOneWalk()
     }
 }
 
+// ---------------------------------------------------------------------------
+// A child deleted through ANOTHER handle is gone for this one too. The one
+// walk above trusts the parent's own cursor, whose quick test answers at once
+// when it already stands on the name asked for -- and a delete made through a
+// second handle on the same node moves a different cursor. 3.5.2's two-walk
+// form asked a fresh walk first, so it answered null here; this pins that the
+// one-walk form does as well, including after the freed block is reused.
+// (Found by the M5 review, 2026-11-22.)
+// ---------------------------------------------------------------------------
+static void Test_CApi_FieldChildAfterForeignDelete()
+{
+    TF_CASE("field_child: a child deleted through another handle answers null")
+    {
+        MsgMgrHandle hMgr = msgcore_mgr_create_nn(MSGCORE_ADDR_32, 4096, 1u << 22);
+        MsgFieldHandle hRoot  = hMgr ? msgcore_mgr_root(hMgr) : nullptr;
+        MsgFieldHandle hRoot2 = hMgr ? msgcore_mgr_root(hMgr) : nullptr;
+        TF_CHECK(hRoot != nullptr && hRoot2 != nullptr && hRoot != hRoot2);
+        if (hRoot && hRoot2)
+        {
+            for (int i = 0; i < 8; ++i)
+            {
+                wchar_t sz[16]; swprintf(sz, 16, L"c%03d", i);
+                msgcore_field_destroy(msgcore_field_declare_int(hRoot, sz, i, 0));
+            }
+            // hRoot's cursor now stands on c005
+            MsgFieldHandle h = msgcore_field_child(hRoot, L"c005");
+            TF_CHECK(h != nullptr && msgcore_field_get_int(h) == 5);
+            msgcore_field_destroy(h);
+
+            TF_CHECK(msgcore_field_delete_item(hRoot2, L"c005") != 0);
+            h = msgcore_field_child(hRoot, L"c005");
+            TF_CHECK(h == nullptr);
+            msgcore_field_destroy(h);
+
+            // Reuse the freed space, then ask again
+            msgcore_field_destroy(msgcore_field_child(hRoot, L"c006"));
+            msgcore_field_destroy(msgcore_field_child(hRoot, L"c005"));
+            for (int i = 100; i < 108; ++i)
+            {
+                wchar_t sz[16]; swprintf(sz, 16, L"c%03d", i);
+                msgcore_field_destroy(msgcore_field_declare_int(hRoot2, sz, i, 0));
+            }
+            h = msgcore_field_child(hRoot, L"c005");
+            TF_CHECK(h == nullptr);
+            msgcore_field_destroy(h);
+
+            // The freed block taken at once by an item of the SAME name under
+            // a DIFFERENT parent: a free puts the block at the head of the free
+            // list, and a same-sized item is the next allocation to fit it.
+            msgcore_field_destroy(msgcore_field_declare_int(hRoot2, L"sub", 0, 0));
+            MsgFieldHandle hSub = msgcore_field_child(hRoot2, L"sub");
+            TF_CHECK(hSub != nullptr);
+            h = msgcore_field_child(hRoot, L"c004");
+            msgcore_field_destroy(h);
+            TF_CHECK(msgcore_field_delete_item(hRoot2, L"c004") != 0);
+            if (hSub) msgcore_field_destroy(msgcore_field_declare_int(hSub, L"c004", 444, 0));
+            h = msgcore_field_child(hRoot, L"c004");
+            TF_CHECK(h == nullptr);
+            if (h) wprintf(L"    field_child(root, c004) answered %d after a foreign delete\n",
+                           msgcore_field_get_int(h));
+            msgcore_field_destroy(h);
+            msgcore_field_destroy(hSub);
+
+            // Deleted and declared again through the other handle: the new one
+            h = msgcore_field_child(hRoot, L"c003");
+            msgcore_field_destroy(h);
+            TF_CHECK(msgcore_field_delete_item(hRoot2, L"c003") != 0);
+            msgcore_field_destroy(msgcore_field_declare_int(hRoot2, L"c003", 333, 0));
+            h = msgcore_field_child(hRoot, L"c003");
+            if (!h || msgcore_field_get_int(h) != 333)
+            {
+                MsgFieldHandle h2 = msgcore_field_child(hRoot2, L"c003");
+                wprintf(L"    field_child(root, c003) = %ls %d; via the other handle %ls %d\n",
+                        h ? L"handle" : L"null", h ? msgcore_field_get_int(h) : 0,
+                        h2 ? L"handle" : L"null", h2 ? msgcore_field_get_int(h2) : 0);
+                msgcore_field_destroy(h2);
+            }
+            TF_CHECK(h != nullptr && msgcore_field_get_int(h) == 333);
+            msgcore_field_destroy(h);
+        }
+        msgcore_field_destroy(hRoot2);
+        msgcore_field_destroy(hRoot);
+        msgcore_mgr_destroy(hMgr);
+    }
+}
+
 void RunMsgcoreCApiSuite()
 {
     Test_CApi_TypeNames();
@@ -828,4 +914,5 @@ void RunMsgcoreCApiSuite()
     Test_CApi_TriggerSink();
     Test_CApi_HandleGuards();
     Test_CApi_FieldChildOneWalk();
+    Test_CApi_FieldChildAfterForeignDelete();
 }
