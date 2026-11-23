@@ -1823,6 +1823,25 @@ target_link_libraries(p2p_timerres PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_timerres COMMAND p2p_timerres)
 set_tests_properties(p2p_timerres PROPERTIES TIMEOUT 60)
 
+# p2p_sendgather: a burst on one link arrives whole and in order when the send
+# path gathers it (MSCS performance plan T3). Since Targetcore 3.9.0 the stock
+# transport stages every queued message - each still trimmed, capped and sealed
+# on its own - and writes up to 64 frames / 64 KB with one write. 600 messages
+# from one thread without waiting: sequence-numbered bodies with a per-frame
+# byte pattern (a frame carrying another's bytes is caught), a 20 KB message
+# every 50th (batches cross the budget and the buffer grows), and three
+# oversized ones - two back to back, one right after a lone uncopied frame -
+# that must be refused and reported while the batch goes on. PLAIN and CYPHER
+# (the cypher's swap buffer is overwritten by the next frame's encryption, the
+# copy-too-late failure); exit 3 if CYPHER got no session cypher. Passes with
+# P2P_SEND_GATHER=0 too: it is the correctness gate, perf_ab measures the gain.
+add_executable(p2p_sendgather p2p_sendgather.cpp)
+_mscs_test_common(p2p_sendgather)
+target_link_libraries(p2p_sendgather PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_sendgather COMMAND p2p_sendgather 7839 7841)
+set_tests_properties(p2p_sendgather PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK "loopback_7839;loopback_7841")
+
 # p2p_gcmdirection: the session cypher holds TWO keys, one per direction, so the
 # key a peer seals with is never the key it opens with, and sealing REFUSES once
 # a key has been used its budget of times
