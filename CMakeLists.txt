@@ -1810,6 +1810,19 @@ target_link_libraries(p2p_hubdtorreport PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_hubdtorreport COMMAND p2p_hubdtorreport)
 set_tests_properties(p2p_hubdtorreport PROPERTIES TIMEOUT 60)
 
+# p2p_timerres: a 50 ms PITimer fires 50 ms after it is set (MSCS performance
+# plan T8). Until Targetcore 3.7.6 deadlines were _time64(0)*1000 + delay, whole
+# wall-clock seconds scaled to milliseconds, so a sub-second timer fired when
+# the second turned - ~0 to 1000 ms after it was set, whatever its delay. Ten
+# re-armed fires, each must land in [49, 250] ms on a monotonic clock. RED (1)
+# on 3.7.5 (Windows: 10 of 10 fires at 708..1014 ms). No sockets, so no port
+# and no RESOURCE_LOCK.
+add_executable(p2p_timerres p2p_timerres.cpp)
+_mscs_test_common(p2p_timerres)
+target_link_libraries(p2p_timerres PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_timerres COMMAND p2p_timerres)
+set_tests_properties(p2p_timerres PROPERTIES TIMEOUT 60)
+
 # p2p_gcmdirection: the session cypher holds TWO keys, one per direction, so the
 # key a peer seals with is never the key it opens with, and sealing REFUSES once
 # a key has been used its budget of times
