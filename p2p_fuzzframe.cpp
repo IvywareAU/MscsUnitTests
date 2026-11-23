@@ -107,6 +107,18 @@
 // ---------------------------------------------------------------------------
 // WHAT IS UNDER TEST — P2Peerio::RecvP2PeerMsg, by stage
 //
+//   SINCE TARGETCORE 3.8.0 (p2p_performance.md T2) the parser reads into a
+//   16 KB receive ring and hands out every complete frame in it before reading
+//   again; a frame bigger than the ring moves to a buffer of its own for the
+//   rest of its read. The layout is stated once, in P2Peerio.h
+//   (P2PeerioRecvRing / P2PeerioRecvRequest), and Deliver() below takes its
+//   destination from that same call. The CHECKS are unchanged and run at the
+//   same point in a frame's arrival - complement, generation, upper and lower
+//   bound as soon as a header is in, the slide-by-one re-sync, the overrun
+//   guard, then stage 4 - so every case below keeps its meaning. The stage
+//   map that follows is the 3.7.x shape, kept because the case comments cite
+//   it; line numbers in it are historical.
+//
 //   Stage 0  P2Peerio.cpp:380-391   dual-buffer init (pUserDB1 = 13 bytes)
 //   Stage 1  P2Peerio.cpp:396-412   fetch the 8-byte oSync header
 //   Stage 2  P2Peerio.cpp:417-458   VALIDATE it, size the body, allocate:
@@ -144,12 +156,12 @@
 //   P2PeerCon.cpp:398 does on a completion, and calls back in. That is the IOCP
 //   completion loop, faithfully, minus the OS.
 //
-//   Deliver() re-derives the request the same way the parser does:
-//       stage 1  &pUserDB1[dwBytes], sizeof(oSync)-dwBytes   (P2Peerio.cpp:400-404)
-//       stage 3  &pUserDB2[dwBytes], nSizeof-dwBytes         (P2Peerio.cpp:473-477)
-//   with nSizeof read from pUserDB1, because that is where stage 3 reads it
-//   (P2Peerio.cpp:461). Delivering a short count models a split TCP read; the
-//   parser accumulating dwBytes across turns models a coalesced stream.
+//   Deliver() takes the request from P2PeerioRecvRequest - the call the parser
+//   makes to issue it - so the address and the size are the parser's own.
+//   Until 3.8.0 it re-derived them (header into pUserDB1, then body into
+//   pUserDB2). Delivering a short count models a split TCP read; delivering
+//   up to the whole free ring models a coalesced stream, which is now also
+//   the common case on a real connection.
 //
 //   NOTHING IS STUBBED. The parser under test is the shipping one, unmodified.
 //   The positive control (case 0) is what proves the mechanism is real: it
@@ -870,24 +882,15 @@ struct DriveResult
 static bool Deliver(OVERLAPPEDcon* pOv, const Wire& oWire, unsigned* pnFed,
                     Rng& oRng, bool bSplit)
 {
-    const unsigned nSync = SyncSizeof();
-    char    *pDst;
-    unsigned nWant;
-
-    if ((unsigned)pOv->dwBytes < nSync)
-    {   // stage 1 - P2Peerio.cpp:400-404
-        if (!pOv->pUserDB1) return false;
-        pDst  = pOv->pUserDB1 + pOv->dwBytes;
-        nWant = nSync - (unsigned)pOv->dwBytes;
-    }
-    else
-    {   // stage 3 - P2Peerio.cpp:461, :473-477. nSizeof comes from pUserDB1.
-        if (!pOv->pUserDB1 || !pOv->pUserDB2) return false;
-        unsigned nSizeof = DeclaredOf((const unsigned char*)pOv->pUserDB1);
-        if (nSizeof <= (unsigned)pOv->dwBytes) return false;
-        pDst  = pOv->pUserDB2 + pOv->dwBytes;
-        nWant = nSizeof - (unsigned)pOv->dwBytes;
-    }
+    // The parser's own statement of where its read goes (P2Peerio.h,
+    // P2PeerioRecvRequest) - the call its RECVNEXT makes before Recv - so this
+    // cannot model a layout the parser no longer has. Since Targetcore 3.8.0
+    // (T2) that is the free tail of the receive ring, or the rest of a frame
+    // too big for the ring in a buffer of its own.
+    char    *pDst  = 0;
+    DWORD    dwWant = 0;
+    if (!P2PeerioRecvRequest(pOv, &pDst, &dwWant) || dwWant == 0) return false;
+    unsigned nWant = (unsigned)dwWant;
 
     unsigned nLeft = oWire.n - *pnFed;
     if (nLeft == 0) return false;
@@ -929,11 +932,12 @@ static void Drive(const Wire& oWire, Rng& oRng, bool bSplit, DriveResult* pRes)
         // from out here, so the harness LEAKS that buffer rather than risk a
         // double free being mistaken for a fuzz finding. Bounded: one frame
         // per affected iteration.
-        bool bStage4 = (oOv.pUserDB1 && oOv.pUserDB2 &&
-                        (unsigned)oOv.dwBytes >= SyncSizeof() &&
-                        (unsigned)oOv.dwBytes >=
-                            DeclaredOf((const unsigned char*)oOv.pUserDB1));
-
+        //
+        // Since 3.8.0 the answer is taken AFTER the call, and conservatively:
+        // stage 4 is the only refusal that can leave a frame in pUserDB2 (the
+        // header checks run before anything is allocated, and the own-buffer
+        // path only reads), so ANY pUserDB2 still set after a refusal is
+        // leaked. Leaking is never a false finding; a double free would be.
         P2PeerMsg* pMsg = 0;
         try
         {
@@ -946,7 +950,7 @@ static void Drive(const Wire& oWire, Rng& oRng, bool bSplit, DriveResult* pRes)
             if (!bRead)
             {
                 pRes->eOutcome = OUT_REFUSED;
-                if (bStage4) oOv.pUserDB2 = 0;      // deliberate leak, see above
+                oOv.pUserDB2 = 0;      // deliberate leak, see above
                 break;
             }
             if (!Deliver(&oOv, oWire, &nFed, oRng, bSplit))
@@ -965,14 +969,14 @@ static void Drive(const Wire& oWire, Rng& oRng, bool bSplit, DriveResult* pRes)
         {
             ++g_nAbandoned;
             pRes->eOutcome = OUT_ASSERT;
-            if (bStage4) oOv.pUserDB2 = 0;      // same ownership rule as above
+            oOv.pUserDB2 = 0;      // same ownership rule as above
             break;
         }
 #endif
         catch (...)
         {
             pRes->eOutcome = OUT_ESCAPED;
-            if (bStage4) oOv.pUserDB2 = 0;
+            oOv.pUserDB2 = 0;
             break;
         }
 
@@ -980,8 +984,12 @@ static void Drive(const Wire& oWire, Rng& oRng, bool bSplit, DriveResult* pRes)
         {
             ++pRes->nMsgs;
             delete pMsg;               // frees the image through P2PmsgHeap_Close
-            if (nFed >= oWire.n) { pRes->eOutcome = OUT_MSG; break; }
-            continue;                  // more bytes on the wire -> next frame
+            // Consumed means the WIRE and the receive buffer: since 3.8.0 one
+            // delivery can carry several frames, and the ones behind this one
+            // are still in the ring with nothing left to feed
+            if (nFed >= oWire.n && P2PeerioRecvPending(&oOv) == 0)
+            { pRes->eOutcome = OUT_MSG; break; }
+            continue;                  // more bytes -> next frame
         }
 
         // nullptr with no read requested: the parser is done with what it has.

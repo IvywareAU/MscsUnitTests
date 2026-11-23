@@ -210,24 +210,14 @@ static bool IsRecvRequest ( P2Pevent *pEVT )
 
 static bool Deliver ( OVERLAPPEDcon *pOv, const Wire &oWire, unsigned *pnFed )
 {
-    const unsigned nSync = SyncSizeof();
-    char          *pDst;
-    unsigned       nWant;
-
-    if ( (unsigned)pOv->dwBytes < nSync )
-    {                                  // stage 1
-      if ( !pOv->pUserDB1 ) return false;
-      pDst  = pOv->pUserDB1 + pOv->dwBytes;
-      nWant = nSync - (unsigned)pOv->dwBytes;
-    }
-    else
-    {                                  // stage 3
-      if ( !pOv->pUserDB1 || !pOv->pUserDB2 ) return false;
-      unsigned nSizeof = DeclaredOf ( (const unsigned char *)pOv->pUserDB1 );
-      if ( nSizeof <= (unsigned)pOv->dwBytes ) return false;
-      pDst  = pOv->pUserDB2 + pOv->dwBytes;
-      nWant = nSizeof - (unsigned)pOv->dwBytes;
-    }
+    //  The parser's own statement of where its read goes (P2Peerio.h,
+    //  P2PeerioRecvRequest), as in p2p_fuzzframe: since Targetcore 3.8.0
+    //  (T2) that is the free tail of the receive ring, or the rest of a
+    //  frame too big for it.  Until then this re-derived header-then-body.
+    char          *pDst   = 0;
+    DWORD          dwWant = 0;
+    if ( !P2PeerioRecvRequest ( pOv, &pDst, &dwWant ) || dwWant == 0 ) return false;
+    unsigned       nWant  = (unsigned)dwWant;
 
     unsigned nLeft = oWire.n - *pnFed;
     if ( nLeft == 0 ) return false;
@@ -276,10 +266,8 @@ static int Drive ( const Wire &oWire, int *pnMsgs, bool bGateRefuses )
       //  the image was freed on a stage 4 throw is undecidable from out here,
       //  so one buffer is LEAKED rather than risk a double free being read as
       //  a finding.  Bounded at one frame per affected mutant.
-      bool bStage4 = ( oOv.pUserDB1 && oOv.pUserDB2 &&
-                       (unsigned)oOv.dwBytes >= SyncSizeof() &&
-                       (unsigned)oOv.dwBytes >=
-                           DeclaredOf ( (const unsigned char *)oOv.pUserDB1 ) );
+      //  Since 3.8.0 read AFTER the call: stage 4 is the only refusal that can
+      //  leave a frame in pUserDB2, so a pUserDB2 still set is that case.
 
       P2PeerMsg *pMsg = 0;
       try
@@ -296,7 +284,7 @@ static int Drive ( const Wire &oWire, int *pnMsgs, bool bGateRefuses )
           //  Dropped only where ownership is genuinely undecidable - see the
           //  note above Drive.  Where the gate has already refused these bytes
           //  the image is still ours and the cleanup below frees it.
-          if ( bStage4 && !bGateRefuses ) oOv.pUserDB2 = 0;
+          if ( oOv.pUserDB2 && !bGateRefuses ) oOv.pUserDB2 = 0;
           break;
         }
         if ( !Deliver ( &oOv, oWire, &nFed ) ) { eOut = OUT_STARVED; break; }
@@ -305,7 +293,7 @@ static int Drive ( const Wire &oWire, int *pnMsgs, bool bGateRefuses )
       catch ( ... )
       {
         eOut = OUT_OTHER;
-        if ( bStage4 && !bGateRefuses ) oOv.pUserDB2 = 0;
+        if ( oOv.pUserDB2 && !bGateRefuses ) oOv.pUserDB2 = 0;
         break;
       }
 
@@ -314,7 +302,7 @@ static int Drive ( const Wire &oWire, int *pnMsgs, bool bGateRefuses )
         ++*pnMsgs;
         delete pMsg;
         eOut = OUT_MSG;
-        if ( nFed >= oWire.n ) break;
+        if ( nFed >= oWire.n && P2PeerioRecvPending ( &oOv ) == 0 ) break;
         continue;
       }
       eOut = OUT_STARVED;
