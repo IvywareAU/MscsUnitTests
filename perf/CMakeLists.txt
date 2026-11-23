@@ -28,7 +28,8 @@
 # case and one `PERFBOX {...}` line per run; tools/perf/perf_run.py (solution
 # root) interleaves runs and parses both.
 #
-#   B0 perf_floor     no MSCS code: thread handoff, loopback TCP, null syscalls
+#   B0 perf_floor     no MSCS code: thread handoff, loopback TCP, null syscalls,
+#                     cross-process shared-memory ping-pong (spin / park)
 #   B1 perf_ab        two-hub loopback (registered one level up, ../perf_ab.cpp)
 #   B2 msgcore_bench  Msgcore with no transport: build / serialize / adopt /
 #                     lookup / MsgFieldRef / Vect / C-API, swept over N fields

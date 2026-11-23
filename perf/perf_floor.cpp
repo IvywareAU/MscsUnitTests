@@ -37,6 +37,22 @@
 //       That is t_sys in E-K. The IOCP/io_uring versions of (b) are not here
 //       yet: blocking sockets are the stack's floor, and the async ones add the
 //       (c) costs, which are measured separately.
+//   (d) CROSS-PROCESS ping-pong through shared memory - the floor of the
+//       shared-memory transport (p2p_performance.md §6.3), against (b)'s
+//       loopback TCP. A real second process (Windows: this exe re-launched with
+//       --shm-child; Linux: fork), one mapping, one buffer per direction, a
+//       sequence word per direction. Each hop copies the payload IN on the
+//       sending side and OUT on the receiving side before touching it - the
+//       copy-before-validate a transport facing another process must make.
+//         shm_spin -- the reader spins on the sequence word: the bound when the
+//                     peer is awake
+//         shm_park -- the reader always sleeps and is woken: Windows by a named
+//                     auto-reset event (WaitOnAddress does not cross a process
+//                     boundary), Linux by a shared futex on the word itself.
+//                     The bound when the peer is parked
+//       A real transport would spin briefly and then park, so its hop lies
+//       between the two. CPU is both processes: the child times its own window
+//       and hands it back through the mapping.
 //
 // Usage:  perf_floor [iterations]        default 20000 round trips per case
 //         PERF_JSON=0 to drop the machine-readable lines.
@@ -59,9 +75,15 @@
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  include <sched.h>
+#  include <linux/futex.h>
 #  include <sys/eventfd.h>
+#  include <signal.h>
+#  include <sys/mman.h>
 #  include <sys/socket.h>
 #  include <sys/syscall.h>
+#  include <sys/wait.h>
+#  include <time.h>
+#  include <unistd.h>
    typedef int sock_t;
 #  define INVALID_SOCKET (-1)
 #  define CLOSESOCK ::close
@@ -262,6 +284,225 @@ static bool LoopbackTcp ( long iters, int cb )
     return true;
 }
 
+// ---- (d) cross-process ping-pong through shared memory ------------------
+//  The mapping. One cache line per sequence word, so the two directions never
+//  share a line; the buffers after them. Zeroed by the OS on both platforms
+struct ShmPingPong
+{
+    alignas(64) std::atomic<uint32_t> ping;    // parent -> child: round trip i+1 sent
+    alignas(64) std::atomic<uint32_t> pong;    // child -> parent: round trip i+1 answered
+    alignas(64) std::atomic<uint32_t> ready;   // child attached
+    double                            childCpu;
+    alignas(64) char                  bufPing[4096];
+    alignas(64) char                  bufPong[4096];
+};
+static_assert ( std::atomic<uint32_t>::is_always_lock_free,
+                "a sequence word shared by two processes must be lock-free" );
+
+enum ShmMode { ShmSpin = 0, ShmPark = 1 };
+
+struct ShmEnd                                  // what one side needs to wait and wake
+{
+    ShmPingPong *p = nullptr;
+#if defined(_WIN32)
+    HANDLE evPing = nullptr, evPong = nullptr;  // auto-reset, named
+#endif
+};
+
+#if !defined(_WIN32)
+static long Futex ( std::atomic<uint32_t> *w, int op, uint32_t v, const timespec *ts )
+{   // NOT FUTEX_PRIVATE: the word is shared between two processes
+    return syscall ( SYS_futex, reinterpret_cast<uint32_t *> ( w ), op, v, ts, nullptr, 0 );
+}
+#endif
+
+//  Wait until *w == want. false only on the 10 s deadline - a dead peer must
+//  fail the case, not hang the run
+static bool ShmWait ( const ShmEnd &e, std::atomic<uint32_t> &w, uint32_t want,
+                      int mode, bool bPing )
+{
+    perf::clk::time_point dl = perf::clk::now ( ) + std::chrono::seconds ( 10 );
+    unsigned long spins = 0;
+    for ( ;; )
+    {
+        uint32_t v = w.load ( std::memory_order_acquire );
+        if ( v == want ) return true;
+        if ( mode == ShmSpin )
+        {
+            if ( ( ++spins & 0xFFFF ) == 0 && perf::clk::now ( ) > dl ) return false;
+            continue;
+        }
+#if defined(_WIN32)
+        (void)v;
+        if ( WaitForSingleObject ( bPing ? e.evPing : e.evPong, 1000 ) == WAIT_FAILED )
+            return false;
+#else
+        (void)e; (void)bPing;
+        timespec ts { 1, 0 };
+        Futex ( &w, FUTEX_WAIT, v, &ts );       // returns at once if w moved off v
+#endif
+        if ( perf::clk::now ( ) > dl ) return false;
+    }
+}
+
+static void ShmWake ( const ShmEnd &e, std::atomic<uint32_t> &w, int mode, bool bPing )
+{
+    if ( mode != ShmPark ) return;
+#if defined(_WIN32)
+    (void)w;
+    SetEvent ( bPing ? e.evPing : e.evPong );
+#else
+    (void)e; (void)bPing;
+    Futex ( &w, FUTEX_WAKE, 1, nullptr );
+#endif
+}
+
+//  The child's half: answer every ping with the same bytes, copied out and back
+static int ShmChild ( const ShmEnd &e, long iters, int mode, int cb )
+{
+    ShmPingPong *p = e.p;
+    std::vector<char> local ( cb );
+    p->ready.store ( 1, std::memory_order_release );
+    double cpu0 = 0;
+    for ( long i = 0; i < iters + 100; ++i )
+    {
+        if ( i == 100 ) cpu0 = perf::CpuNow ( );
+        if ( !ShmWait ( e, p->ping, (uint32_t)( i + 1 ), mode, true ) ) return 1;
+        std::memcpy ( local.data ( ), p->bufPing, cb );     // out, before use
+        std::memcpy ( p->bufPong, local.data ( ), cb );     // in
+        p->pong.store ( (uint32_t)( i + 1 ), std::memory_order_release );
+        ShmWake ( e, p->pong, mode, false );
+    }
+    p->childCpu = perf::CpuNow ( ) - cpu0;
+    return 0;
+}
+
+//  The parent's half: the timed loop, the same shape as LoopbackTcp
+static bool ShmParent ( const ShmEnd &e, long iters, int mode, int cb,
+                        std::vector<double> &rtt, double &cpu )
+{
+    ShmPingPong *p = e.p;
+    std::vector<char> local ( cb, 'x' );
+    perf::clk::time_point dl = perf::clk::now ( ) + std::chrono::seconds ( 10 );
+    while ( !p->ready.load ( std::memory_order_acquire ) )
+    {
+        if ( perf::clk::now ( ) > dl ) { std::printf ( "SETUP: shm child never attached\n" ); return false; }
+        std::this_thread::yield ( );
+    }
+    rtt.reserve ( iters );
+    double cpu0 = 0;
+    for ( long i = 0; i < iters + 100; ++i )
+    {
+        if ( i == 100 ) cpu0 = perf::CpuNow ( );
+        perf::clk::time_point t0 = perf::clk::now ( );
+        std::memcpy ( p->bufPing, local.data ( ), cb );
+        p->ping.store ( (uint32_t)( i + 1 ), std::memory_order_release );
+        ShmWake ( e, p->ping, mode, true );
+        if ( !ShmWait ( e, p->pong, (uint32_t)( i + 1 ), mode, false ) )
+        { std::printf ( "SETUP: shm ping-pong broke at %ld\n", i ); return false; }
+        std::memcpy ( local.data ( ), p->bufPong, cb );
+        if ( i >= 100 ) rtt.push_back ( perf::NsSince ( t0 ) );
+    }
+    cpu = perf::CpuNow ( ) - cpu0;
+    return true;
+}
+
+#if defined(_WIN32)
+static std::string ShmName ( int mode, int cb, const char *suffix )
+{
+    return "Local\\perf_floor_shm_" + std::to_string ( GetCurrentProcessId ( ) ) + "_"
+         + std::to_string ( mode ) + "_" + std::to_string ( cb ) + suffix;
+}
+
+//  argv: --shm-child <base name> <iters> <mode> <cb>
+static int ShmChildMain ( int argc, char *argv[] )
+{
+    if ( argc < 6 ) return 1;
+    std::string base = argv[2];
+    long iters = std::atol ( argv[3] );
+    int  mode  = std::atoi ( argv[4] ), cb = std::atoi ( argv[5] );
+    HANDLE hMap = OpenFileMappingA ( FILE_MAP_ALL_ACCESS, FALSE, base.c_str ( ) );
+    if ( !hMap ) return 1;
+    ShmEnd e;
+    e.p      = (ShmPingPong *)MapViewOfFile ( hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof ( ShmPingPong ) );
+    e.evPing = OpenEventA ( EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, ( base + "_ping" ).c_str ( ) );
+    e.evPong = OpenEventA ( EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, ( base + "_pong" ).c_str ( ) );
+    if ( !e.p || !e.evPing || !e.evPong ) return 1;
+    int rc = ShmChild ( e, iters, mode, cb );
+    UnmapViewOfFile ( e.p );
+    CloseHandle ( e.evPing ); CloseHandle ( e.evPong ); CloseHandle ( hMap );
+    return rc;
+}
+
+static bool ShmPingPongCase ( long iters, int mode, int cb )
+{
+    std::string base = ShmName ( mode, cb, "" );
+    HANDLE hMap = CreateFileMappingA ( INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                       (DWORD)sizeof ( ShmPingPong ), base.c_str ( ) );
+    if ( !hMap ) { std::printf ( "SETUP: CreateFileMapping failed\n" ); return false; }
+    ShmEnd e;
+    e.p      = (ShmPingPong *)MapViewOfFile ( hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof ( ShmPingPong ) );
+    e.evPing = CreateEventA ( nullptr, FALSE, FALSE, ( base + "_ping" ).c_str ( ) );
+    e.evPong = CreateEventA ( nullptr, FALSE, FALSE, ( base + "_pong" ).c_str ( ) );
+    if ( !e.p || !e.evPing || !e.evPong )
+    { std::printf ( "SETUP: MapViewOfFile/CreateEvent failed\n" ); CloseHandle ( hMap ); return false; }
+    new ( e.p ) ShmPingPong ( );
+
+    char exe[MAX_PATH];
+    GetModuleFileNameA ( nullptr, exe, MAX_PATH );
+    std::string cmd = std::string ( "\"" ) + exe + "\" --shm-child " + base + " "
+                    + std::to_string ( iters ) + " " + std::to_string ( mode ) + " "
+                    + std::to_string ( cb );
+    STARTUPINFOA si {}; si.cb = sizeof si;
+    PROCESS_INFORMATION pi {};
+    std::vector<char> cmdBuf ( cmd.begin ( ), cmd.end ( ) ); cmdBuf.push_back ( 0 );
+    if ( !CreateProcessA ( nullptr, cmdBuf.data ( ), nullptr, nullptr, FALSE, 0,
+                           nullptr, nullptr, &si, &pi ) )
+    { std::printf ( "SETUP: CreateProcess failed (%lu)\n", GetLastError ( ) );
+      UnmapViewOfFile ( e.p ); CloseHandle ( hMap ); return false; }
+
+    std::vector<double> rtt; double cpu = 0;
+    bool ok = ShmParent ( e, iters, mode, cb, rtt, cpu );
+    DWORD code = 1;
+    if ( WaitForSingleObject ( pi.hProcess, 30000 ) != WAIT_OBJECT_0 )
+    { TerminateProcess ( pi.hProcess, 1 ); ok = false; }
+    else if ( !GetExitCodeProcess ( pi.hProcess, &code ) || code != 0 ) ok = false;
+    double childCpu = e.p->childCpu;
+    CloseHandle ( pi.hThread ); CloseHandle ( pi.hProcess );
+    UnmapViewOfFile ( e.p );
+    CloseHandle ( e.evPing ); CloseHandle ( e.evPong ); CloseHandle ( hMap );
+    if ( !ok ) { std::printf ( "SETUP: shm case failed (child exit %lu)\n", code ); return false; }
+    ReportOneWay ( mode == ShmSpin ? "shm_spin" : "shm_park", std::to_string ( cb ) + "B",
+                   std::move ( rtt ), cpu + childCpu );
+    return true;
+}
+#else
+static bool ShmPingPongCase ( long iters, int mode, int cb )
+{
+    void *pv = mmap ( nullptr, sizeof ( ShmPingPong ), PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_ANONYMOUS, -1, 0 );
+    if ( pv == MAP_FAILED ) { std::printf ( "SETUP: mmap failed\n" ); return false; }
+    ShmEnd e;
+    e.p = new ( pv ) ShmPingPong ( );
+    std::fflush ( stdout );                    // or the child inherits and repeats it
+    pid_t pid = fork ( );
+    if ( pid < 0 ) { std::printf ( "SETUP: fork failed\n" ); munmap ( pv, sizeof ( ShmPingPong ) ); return false; }
+    if ( pid == 0 ) _exit ( ShmChild ( e, iters, mode, cb ) );
+
+    std::vector<double> rtt; double cpu = 0;
+    bool ok = ShmParent ( e, iters, mode, cb, rtt, cpu );
+    if ( !ok ) kill ( pid, SIGKILL );
+    int st = 0;
+    if ( waitpid ( pid, &st, 0 ) != pid || !WIFEXITED ( st ) || WEXITSTATUS ( st ) != 0 ) ok = false;
+    double childCpu = e.p->childCpu;
+    munmap ( pv, sizeof ( ShmPingPong ) );
+    if ( !ok ) { std::printf ( "SETUP: shm case failed\n" ); return false; }
+    ReportOneWay ( mode == ShmSpin ? "shm_spin" : "shm_park", std::to_string ( cb ) + "B",
+                   std::move ( rtt ), cpu + childCpu );
+    return true;
+}
+#endif
+
 // ---- (c) one kernel transition with nothing to do -----------------------
 static bool NullSyscalls ( long iters )
 {
@@ -308,6 +549,10 @@ static bool NullSyscalls ( long iters )
 
 int main ( int argc, char *argv[] )
 {
+#if defined(_WIN32)
+    if ( argc > 1 && std::strcmp ( argv[1], "--shm-child" ) == 0 )
+      return ShmChildMain ( argc, argv );      // (d)'s second process; prints nothing
+#endif
     long iters = argc > 1 ? std::atol ( argv[1] ) : 20000;
     if ( iters < 100 ) iters = 100;
 
@@ -332,6 +577,13 @@ int main ( int argc, char *argv[] )
     std::printf ( "\n--- (b) loopback TCP ping-pong, NODELAY, blocking, one-way ---\n" );
     ok &= LoopbackTcp ( iters, 64 );
     ok &= LoopbackTcp ( iters, 4048 );
+
+    std::printf ( "\n--- (d) cross-process shared memory ping-pong, one-way ---\n" );
+    for ( int cb : { 64, 4048 } )
+    {
+      ok &= ShmPingPongCase ( iters, ShmSpin, cb );
+      ok &= ShmPingPongCase ( iters, ShmPark, cb );
+    }
 
     std::printf ( "\n--- (c) one kernel transition, nothing to do ---\n" );
     ok &= NullSyscalls ( iters * 10 );
