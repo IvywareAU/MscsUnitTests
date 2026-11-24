@@ -2615,6 +2615,24 @@ add_test(NAME perf_ab COMMAND perf_ab 2000 50000 64)
 set_tests_properties(perf_ab PROPERTIES
     TIMEOUT 300 RESOURCE_LOCK loopback_7802 LABELS measure)
 
+# p2p_wirecycle: a received frame whose OBJECT GRAPH is forged into a cycle, or
+# nested abusively deep, must not hang or crash the readers (F-P6-6). The block
+# walk p2p_fuzzframe attacks proves a frame's blocks; this attacks the graph
+# those blocks form - a sibling chain that loops, a descendant that points at an
+# ancestor - which the block walk does not inspect. No socket: it builds frames
+# with the library serializer and drives the P2PeerMsg(image,len) ingress
+# constructor, exactly as p2p_fuzzframe drives the framing path. A watchdog
+# thread turns a non-terminating walk into a named FAIL rather than ctest's bare
+# "Timeout"; a crash exits nonzero on its own.
+#   STATUS: PASSES  (measured 2026-11-24, Windows Release; the F-P6-6 bounds in
+#           MsgCurs.cpp/P2Pmsg.cpp and the GateAppMsgInbound gate). Before them
+#           the sibling cases HUNG and the descendant case was 0xC00000FD.
+add_executable(p2p_wirecycle p2p_wirecycle.cpp)
+_mscs_test_common(p2p_wirecycle)
+target_link_libraries(p2p_wirecycle PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_wirecycle COMMAND p2p_wirecycle)
+set_tests_properties(p2p_wirecycle PROPERTIES TIMEOUT 120 LABELS security)
+
 # The rest of the P0 performance suite (p2p_performance.md §3): B0 perf_floor,
 # B3 crypto_bench, and the benches still to come. A subdirectory so the suite is
 # one place; it applies its own loader path, since _mscs_apply_loader_path()
