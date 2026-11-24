@@ -64,8 +64,15 @@ set_tests_properties(perf_floor PROPERTIES TIMEOUT 300 LABELS measure)
 # processes. Not an MFC program. Windows needs only the platform headers. Linux
 # compiles the IOCP shim backend itself, the one Targetcore compiles
 # (P2P_IO_BACKEND): libtargetcore.so builds it with hidden visibility, so its
-# CreateIoCompletionPort / p2p_iocp_poll cannot be linked from outside.
-if(TARGET p2pplatform)
+# CreateIoCompletionPort / p2p_iocp_poll cannot be linked from outside. Skipped
+# where those sources are absent (the CI parse check's stub siblings).
+set(_perf_shm_shim ${CMAKE_SOURCE_DIR}/Msgcore/Platform/p2piocp.cpp)
+if(P2P_IO_BACKEND STREQUAL "epoll")
+    set(_perf_shm_shim ${CMAKE_SOURCE_DIR}/Msgcore/Platform/p2piocp_epoll.cpp)
+endif()
+if(NOT TARGET p2pplatform OR (NOT WIN32 AND NOT EXISTS ${_perf_shm_shim}))
+    message(STATUS "perf: perf_shm skipped (p2pplatform or the IOCP shim source not found)")
+else()
     add_executable(perf_shm perf_shm.cpp)
     target_compile_features(perf_shm PRIVATE cxx_std_23)
     target_include_directories(perf_shm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -74,10 +81,8 @@ if(TARGET p2pplatform)
         set_target_properties(perf_shm PROPERTIES MFC_FLAG 0)
     else()
         find_package(Threads REQUIRED)
-        if(P2P_IO_BACKEND STREQUAL "epoll")
-            target_sources(perf_shm PRIVATE ${CMAKE_SOURCE_DIR}/Msgcore/Platform/p2piocp_epoll.cpp)
-        else()
-            target_sources(perf_shm PRIVATE ${CMAKE_SOURCE_DIR}/Msgcore/Platform/p2piocp.cpp)
+        target_sources(perf_shm PRIVATE ${_perf_shm_shim})
+        if(NOT P2P_IO_BACKEND STREQUAL "epoll")
             target_link_libraries(perf_shm PRIVATE uring)
         endif()
         target_link_libraries(perf_shm PRIVATE Threads::Threads)
