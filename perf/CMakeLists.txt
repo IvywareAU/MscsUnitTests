@@ -59,6 +59,33 @@ endif()
 add_test(NAME perf_floor COMMAND perf_floor 20000)
 set_tests_properties(perf_floor PROPERTIES TIMEOUT 300 LABELS measure)
 
+# B10 perf_shm -- p2p_performance.md §6.3a S1: the shared-memory transport's
+# primitives (Msgcore/Platform/p2pshm.h) through a pump's completion port, two
+# processes. Not an MFC program. Windows needs only the platform headers. Linux
+# compiles the IOCP shim backend itself, the one Targetcore compiles
+# (P2P_IO_BACKEND): libtargetcore.so builds it with hidden visibility, so its
+# CreateIoCompletionPort / p2p_iocp_poll cannot be linked from outside.
+if(TARGET p2pplatform)
+    add_executable(perf_shm perf_shm.cpp)
+    target_compile_features(perf_shm PRIVATE cxx_std_23)
+    target_include_directories(perf_shm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(perf_shm PRIVATE p2pplatform)
+    if(WIN32)
+        set_target_properties(perf_shm PROPERTIES MFC_FLAG 0)
+    else()
+        find_package(Threads REQUIRED)
+        if(P2P_IO_BACKEND STREQUAL "epoll")
+            target_sources(perf_shm PRIVATE ${CMAKE_SOURCE_DIR}/Msgcore/Platform/p2piocp_epoll.cpp)
+        else()
+            target_sources(perf_shm PRIVATE ${CMAKE_SOURCE_DIR}/Msgcore/Platform/p2piocp.cpp)
+            target_link_libraries(perf_shm PRIVATE uring)
+        endif()
+        target_link_libraries(perf_shm PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME perf_shm COMMAND perf_shm 20000)
+    set_tests_properties(perf_shm PROPERTIES TIMEOUT 300 LABELS measure)
+endif()
+
 # B2 msgcore_bench -- links msgcore + p2pplatform, nothing from Targetcore, and
 # is built the way golden_utf16 is (_mscs_test_common: the suite's stdafx.h,
 # Unicode, MFC on Windows). It needs the real msgcore target, so the CI

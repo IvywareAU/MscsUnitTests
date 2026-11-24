@@ -185,6 +185,9 @@ endfunction()
 mscs_mesh_test(dmx_mesh)      # in-process Dmx pump + login (no OS handle)
 mscs_mesh_test(wsa_mesh)      # loopback TCP (io_uring on Linux / Winsock IOCP on Windows)
 mscs_mesh_test(pipe_mesh)     # AF_UNIX (Linux) / named pipe (Windows)
+mscs_mesh_test(shm_mesh)      # shared memory, the pipe for control (p2p_performance §6.3a)
+mscs_mesh_test(shm_xproc)     # the same between two PROCESSES: traffic, a peer that dies, survival
+set_tests_properties(shm_xproc PROPERTIES TIMEOUT 180)
 mscs_mesh_test(mix_con)       # one hub, Wsa + Pipe cons at once (Phase-4 exit)
 mscs_mesh_test(mix_con3)      # + Dmx: the TOCTOU-stall reproduction (run repeatedly)
 set_tests_properties(mix_con3 PROPERTIES TIMEOUT 60)
@@ -1048,6 +1051,32 @@ add_test(NAME p2p_pipecap_control COMMAND p2p_pipecap_control --uncapped)
 set_tests_properties(p2p_pipecap_control PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK pipe_P2PcapProbe LABELS security)
 
+# p2p_shmcap (+ _control): the same gate and control against the shared-memory
+# transport (p2p_performance.md §6.3a S2), the same source run with --shm.
+# P2PeerConShm inherits the cap from P2PeerConPipe and adds the shm offer after
+# every accept the cap lets through - so the refusal must still land before the
+# offer (P2PeerConShm::OnAccept returns early when the base refused), and phase 3
+# now also proves the death watch gives the slot back: the first raw client
+# leaves, the pipe read sees EOF, and a third must get in. A raw client that was
+# served receives the offer's hello, which WasDroppedByServer reads as "still up".
+# Own pipe name (P2PshmCapProbe), own lock.
+#   STATUS: PASSES        (measured 2026-11-24, Windows Release + Debug, Linux Release + ASan + TSan)
+add_executable(p2p_shmcap p2p_pipecap.cpp)
+_mscs_test_common(p2p_shmcap)
+target_link_libraries(p2p_shmcap PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_shmcap COMMAND p2p_shmcap --shm)
+set_tests_properties(p2p_shmcap PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK pipe_P2PshmCapProbe LABELS security)
+
+# p2p_shmcap_control: the uncapped control for the run above, as p2p_pipecap_control.
+#   STATUS: PASSES        (measured 2026-11-24, Windows Release + Debug, Linux Release + ASan + TSan)
+add_executable(p2p_shmcap_control p2p_pipecap.cpp)
+_mscs_test_common(p2p_shmcap_control)
+target_link_libraries(p2p_shmcap_control PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_shmcap_control COMMAND p2p_shmcap_control --shm --uncapped)
+set_tests_properties(p2p_shmcap_control PROPERTIES
+    TIMEOUT 120 RESOURCE_LOCK pipe_P2PshmCapProbe LABELS security)
+
 # p2p_dmxcap: the same question again, asked of P2PeerConDmx - the in-process
 # transport, and the last of the four that OpenCodeWork.md item 2 named. The
 # decision helper AcceptAtCapacity() is on the base class (P2PeerCon.h:255);
@@ -1780,6 +1809,22 @@ target_link_libraries(p2p_sealwire PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_sealwire COMMAND p2p_sealwire 7817)
 set_tests_properties(p2p_sealwire PROPERTIES
     TIMEOUT 120 RESOURCE_LOCK loopback_7817 LABELS security)
+
+# p2p_shmwire: the same question for the shared-memory transport (p2p_performance.md
+# §6.3a S2, Targetcore 3.10.0). Its rings are never zeroed after a read, so the
+# mapping keeps the last 64 KB each way - a wire with a recording. Sealwire's three
+# hubs with both links over shm; main scans EVERY "P2SH" mapping of the process
+# (VirtualQuery MEM_MAPPED / /proc/self/maps memfd:p2pshm). Controls: Carol gets the
+# body exactly, the middle forwarded it sealed, and 32 bytes of that very ciphertext
+# are found in a mapping. Probe: the plaintext is in no mapping (2 KB and 20 KB).
+# No port: the pipe name carries the pid.
+#   STATUS: PASSES        (measured 2026-11-24, Windows Release + Debug, Linux Release + ASan + TSan)
+add_executable(p2p_shmwire p2p_shmwire.cpp)
+_mscs_test_common(p2p_shmwire)
+target_include_directories(p2p_shmwire PRIVATE ${CMAKE_SOURCE_DIR}/Msgcore/Platform)
+target_link_libraries(p2p_shmwire PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_shmwire COMMAND p2p_shmwire)
+set_tests_properties(p2p_shmwire PROPERTIES TIMEOUT 120 LABELS security)
 
 # p2p_vnetmount: the VNet qualifier end to end (p2p_PeerLan_L7b.md §7). V:x is
 # x inside the network MOUNTED at hub V; ':' is a hop boundary; a mount is a

@@ -1953,8 +1953,106 @@ static void Test_UndeliverableReportBounded()
 }
 
 // ---------------------------------------------------------------------------
+// F-P6-5 (c): P2PeerMsgnn's constructor builds the Net item in one pass
+// (P2PeerMsg::InitNetAddr) instead of InitItem + SetSource + SetDestin. The
+// image must be the one the old route built, byte for byte - so a peer on an
+// older build reads it exactly as before. OldRoute below IS the old
+// constructor body, kept verbatim as the reference.
+static std::vector<char> TcImageBytes(P3PmsgBSTR& oMsg)
+{
+    oMsg.PrepareP2Piomage(~(DWORD)0);
+    const UINT n = oMsg.P2PiomageSize();
+    const char* p = (const char*)oMsg.P2Piomage();
+    std::vector<char> v(p, p + n);
+    oMsg.ReleaseP2Piomage();
+    return v;
+}
+
+template<UCHAR uBSTRnn>
+struct OldRoute : public P2PeerMsgnn<uBSTRnn>
+{
+    OldRoute(P2PaddrSTR src, P2PaddrSTR dst, P2PmsgID name, const void* pv, P2Psize_t n)
+        : P2PeerMsgnn<uBSTRnn>((VBLsize)2024)
+    {
+        this->r_name().c_name(name);
+        this->SetSource(P3PmsgField(TMsg_Src, DataWSTR08(src)));
+        this->SetDestin(P3PmsgField(TMsg_Dst, DataWSTR08(dst)));
+        if (n <= 255)
+            this->InitItem(VBLockBSTR_MSG, P3PmsgData(pv, n, VBLockData_BLOB08));
+        else
+            this->InitItem(VBLockBSTR_MSG, P3PmsgData(pv, n, VBLockData_BLOB16));
+    }
+};
+
+template<UCHAR uBSTRnn>
+static void NetAddrCompareOne(const wchar_t* src, const wchar_t* dst, const void* pv,
+                              P2Psize_t n, int& nCompared, int& nDiffer)
+{
+    std::vector<char> vNew, vOld;
+    try
+    {
+        P2PeerMsgnn<uBSTRnn> oNew(src, dst, P2Pmsg_BCast, pv, n);
+        OldRoute<uBSTRnn>    oOld(src, dst, P2Pmsg_BCast, pv, n);
+        vNew = TcImageBytes(oNew);
+        vOld = TcImageBytes(oOld);
+        // And the fields read back as what was put in
+        if (CString(oNew.GetSource()) != src || CString(oNew.GetDestin()) != dst ||
+            (P2Psize_t)oNew.DataSize() != n)
+        {
+            printf("    [F-P6-5] width %u n=%u: fields do not read back\n", (UINT)uBSTRnn, (UINT)n);
+            ++nDiffer;
+        }
+    }
+    catch (P2Pevent* pEVT)
+    {
+        printf("    [F-P6-5] width %u n=%u src=%ls: threw\n", (UINT)uBSTRnn, (UINT)n, src);
+        if (pEVT) { if (nDiffer == 0) pEVT->Print(); pEVT->Cancel(false); }
+        ++nDiffer;
+        return;
+    }
+    ++nCompared;
+    if (vNew != vOld)
+    {
+        ++nDiffer;
+        size_t i = 0;
+        while (i < vNew.size() && i < vOld.size() && vNew[i] == vOld[i]) ++i;
+        printf("    [F-P6-5] width %u n=%u src=%ls: images differ at byte %zu (%zu vs %zu bytes)\n",
+               (UINT)uBSTRnn, (UINT)n, src, i, vNew.size(), vOld.size());
+    }
+}
+
+static void Test_NetAddrFastPath()
+{
+    TF_CASE("F-P6-5: P2PeerMsgnn's one-pass Net item builds the image SetSource + SetDestin built, byte for byte")
+    {
+        static char aBlob[3000];
+        for (int i = 0; i < (int)sizeof(aBlob); i++) aBlob[i] = (char)(i * 5 + 3);
+        static const std::wstring sLong(100, L'q');   // WSTR08: 255 bytes at most
+        const wchar_t* kAddr[][2] = {
+            { L"PerfAB.Client", L"PerfAB.Server" },
+            { L"A",             L"Root.Hub.Child.Leaf" },
+            { L"",              L"Dst" },
+            { sLong.c_str(),    L"Root" },
+        };
+        const P2Psize_t kSizes[] = { 0, 2, 64, 255, 256, 3000 };
+        int nCompared = 0, nDiffer = 0;
+        for (auto& a : kAddr)
+            for (P2Psize_t n : kSizes)
+            {
+                NetAddrCompareOne<VBLock_Addr16>(a[0], a[1], aBlob, n, nCompared, nDiffer);
+                NetAddrCompareOne<VBLock_Addr32>(a[0], a[1], aBlob, n, nCompared, nDiffer);
+                NetAddrCompareOne<VBLock_Addr64>(a[0], a[1], aBlob, n, nCompared, nDiffer);
+            }
+        printf("    [F-P6-5] %d images compared, %d differ\n", nCompared, nDiffer);
+        TF_CHECK_EQ(nCompared, 72);
+        TF_CHECK_EQ(nDiffer, 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 void RunTargetcoreSuite()
 {
+    Test_NetAddrFastPath();
     Test_MessageValuePlumbing();
     Test_AppFields();
     Test_AddrNameAccessors();

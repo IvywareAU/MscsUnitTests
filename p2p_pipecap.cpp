@@ -80,6 +80,7 @@
 #include "P2Pwin32.h"
 #include "P2PeerHub.h"
 #include "P2PeerConPipe.h"
+#include "P2PeerConShm.h"
 #include "P2PeerMsg.h"
 #include "Msgexception.h"
 
@@ -87,6 +88,10 @@
 #include <cstring>
 
 // ---------------------------------------------------------------------------
+//  --shm swaps the service for P2PeerConShm (p2p_performance.md §6.3a S2, registered as
+//  p2p_shmcap / p2p_shmcap_control): the same cap, inherited from P2PeerConPipe, with the
+//  shm offer running after every accept the cap lets through. Its own pipe name, so it
+//  needs no lock against the pipe entries
 static LPCTSTR          kPipeName   = _T("\\\\.\\pipe\\P2PcapProbe");
 static const P2PaddrSTR kServerAddr = L"PipeCap.Server";
 static const P2PaddrSTR kDomain     = L"PipeCap.*";
@@ -192,14 +197,22 @@ public:
 // =========================================================================
 int main ( int argc, char *argv[] )
 {
-    bool bUncapped = false;
+    bool bUncapped = false, bShm = false;
     for ( int i = 1; i < argc; ++i )
-      if ( std::strcmp ( argv[i], "--uncapped" ) == 0 )
-        bUncapped = true;
+    {
+      if ( std::strcmp ( argv[i], "--uncapped" ) == 0 ) bUncapped = true;
+      if ( std::strcmp ( argv[i], "--shm" )      == 0 ) bShm      = true;
+    }
+    if ( bShm )
+    {
+      kPipeName = _T("\\\\.\\pipe\\P2PshmCapProbe");
+      if ( !P2PeerConShm::IsSupported ( ) ) { Log ( "SETUP: the shm transport is unsupported here" ); return 2; }
+    }
 
     const long xCap = bUncapped ? 0 : 1;
 
-    std::printf ( "=== p2p_pipecap - the accept cap on the PIPE transport%s ===\n",
+    std::printf ( "=== p2p_pipecap - the accept cap on the %s transport%s ===\n",
+                  bShm ? "SHM (pipe control)" : "PIPE",
                   bUncapped ? " (CONTROL: uncapped)" : "" );
     std::printf ( "Pipe : %ls\n", (LPCWSTR)kPipeName );
     std::printf ( "Asserting: %s\n\n",
@@ -224,7 +237,8 @@ int main ( int argc, char *argv[] )
         HANDLE hServerThread = oServer.SpawnHub ( );
         if ( !hServerThread ) { Log ( "SETUP: server SpawnHub() failed" ); return 2; }
 
-        P2PeerConPipe *pSvc = P2PeerConPipe::ServiceFactory ( kDomain, kPipeName );
+        P2PeerConPipe *pSvc = bShm ? P2PeerConShm::ServiceFactory  ( kDomain, kPipeName )
+                                   : P2PeerConPipe::ServiceFactory ( kDomain, kPipeName );
         if ( !pSvc ) { Log ( "SETUP: ServiceFactory failed" ); return 2; }
 
         //  The login deadline is OFF, so a client that goes away can only have

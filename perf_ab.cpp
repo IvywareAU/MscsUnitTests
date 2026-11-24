@@ -49,7 +49,7 @@
 //                        the destination, so here D does C's work (measured
 //                        2026-11-18: same latency, same frame). The seal's cost
 //                        is p2p_linkcost's (three hubs) or B5's relay chain.
-//   PERF_TRANSPORT=wsa|dmx|pipe
+//   PERF_TRANSPORT=wsa|dmx|pipe|shm
 //                        loopback TCP (default, port 7802), in-process Dmx, or a
 //                        named pipe. Trust differs by transport, so E only
 //                        relaxes a link whose class the transport can vouch for
@@ -99,6 +99,7 @@
 #include "P2PeerConWsa.h"
 #include "P2PeerConDmx.h"
 #include "P2PeerConPipe.h"
+#include "P2PeerConShm.h"
 #include "P2PeerMsg.h"
 #include "P2PIdentityStore.h"
 #include "Msgexception.h"
@@ -172,9 +173,9 @@ static const Posture kPost[] =
 static const Posture* g_pPost = &kPost[1];          // A
 
 // --- transport (PERF_TRANSPORT) -------------------------------------------
-enum Transport { TrWsa, TrDmx, TrPipe };
+enum Transport { TrWsa, TrDmx, TrPipe, TrShm };
 static Transport   g_eTr = TrWsa;
-static const char* TrName() { return g_eTr == TrDmx ? "dmx" : g_eTr == TrPipe ? "pipe" : "wsa"; }
+static const char* TrName() { return g_eTr == TrDmx ? "dmx" : g_eTr == TrPipe ? "pipe" : g_eTr == TrShm ? "shm" : "wsa"; }
 static LPCTSTR     kDmxSvc  = _T("PerfAB.Dmx");
 static LPCTSTR     kPipeName = _T("\\\\.\\pipe\\PerfAB");
 
@@ -479,7 +480,10 @@ int main(int argc, char* argv[])
       if (t.empty() || t == "wsa") g_eTr = TrWsa;
       else if (t == "dmx")         g_eTr = TrDmx;
       else if (t == "pipe")        g_eTr = TrPipe;
-      else { std::printf("FATAL: PERF_TRANSPORT=%s (want wsa|dmx|pipe).\n", t.c_str()); return 1; } }
+      else if (t == "shm")         g_eTr = TrShm;
+      else { std::printf("FATAL: PERF_TRANSPORT=%s (want wsa|dmx|pipe|shm).\n", t.c_str()); return 1; } }
+    if (g_eTr == TrShm && !P2PeerConShm::IsSupported())
+    { std::printf("FATAL: PERF_TRANSPORT=shm is not supported on this platform.\n"); return 1; }
     { const char* rs = std::getenv("PERF_ROLE");                 // B7
       std::string r = rs ? rs : "";
       if (r.empty() || r == "both") g_eRole = RoleBoth;
@@ -489,8 +493,11 @@ int main(int argc, char* argv[])
     if (const char* p = std::getenv("PERF_PEER"))   if (*p) g_sPeer = p;
     if (const char* p = std::getenv("PERF_PORT"))   if (*p) kTestPort = (short)std::atoi(p);
     if (const char* p = std::getenv("PERF_KEYDIR")) if (*p) g_sKeyDir = p;
-    if (g_eRole != RoleBoth && g_eTr != TrWsa)
-    { std::printf("FATAL: PERF_ROLE=%s needs PERF_TRANSPORT=wsa (two processes, maybe two hosts).\n",
+    //  pipe and shm cross a PROCESS boundary too (one host): the S3 A/B of
+    //  p2p_performance.md 6.3a is these two roles with PERF_TRANSPORT=wsa|pipe|shm.
+    //  Only dmx is in-process by definition
+    if (g_eRole != RoleBoth && g_eTr == TrDmx)
+    { std::printf("FATAL: PERF_ROLE=%s needs PERF_TRANSPORT=wsa|pipe|shm (two processes).\n",
                   RoleName()); return 1; }
     long nServeIdle = 300;
     if (const char* p = std::getenv("PERF_SERVE_IDLE")) if (*p) nServeIdle = (std::max)(1L, std::atol(p));
@@ -508,7 +515,7 @@ int main(int argc, char* argv[])
                 g_blockWait ? "condvar-block" : "yield-spin");
     std::printf("batch=%zu  (set PERF_BATCH=N for the W6 batch-sender path in Phase T)\n",
                 g_batch);
-    std::printf("posture=%c (%s)  transport=%s  (PERF_POSTURE=A..E|L, PERF_TRANSPORT=wsa|dmx|pipe)\n",
+    std::printf("posture=%c (%s)  transport=%s  (PERF_POSTURE=A..E|L, PERF_TRANSPORT=wsa|dmx|pipe|shm)\n",
                 g_pPost->cTag, g_pPost->pszName, TrName());
     if (g_eRole != RoleBoth)
         std::printf("role=%s%s%s  (B7: latency is a ROUND TRIP, throughput counts echoes)\n", RoleName(),
@@ -554,6 +561,7 @@ int main(int argc, char* argv[])
         P2PeerCon* pSvc =
             g_eTr == TrDmx  ? (P2PeerCon*)P2PeerConDmx::ServiceFactory(kClientAddr, kDmxSvc)
           : g_eTr == TrPipe ? (P2PeerCon*)P2PeerConPipe::ServiceFactory(kClientAddr, kPipeName)
+          : g_eTr == TrShm  ? (P2PeerCon*)P2PeerConShm::ServiceFactory(kClientAddr, kPipeName)
           :                   (P2PeerCon*)P2PeerConWsa::ServiceFactory(kClientAddr, kTestPort);
         if (!pSvc) { std::printf("FATAL: ServiceFactory failed.\n"); return 1; }
         oServer.PostP2PeerCon(pSvc);
@@ -595,6 +603,7 @@ int main(int argc, char* argv[])
     P2PeerCon* pCli =
         g_eTr == TrDmx  ? (P2PeerCon*)P2PeerConDmx::ClientFactory(kServerAddr, kDmxSvc)
       : g_eTr == TrPipe ? (P2PeerCon*)P2PeerConPipe::ClientFactory(kServerAddr, kPipeName)
+      : g_eTr == TrShm  ? (P2PeerCon*)P2PeerConShm::ClientFactory(kServerAddr, kPipeName)
       :                   (P2PeerCon*)P2PeerConWsa::ClientFactory(kServerAddr, wPeer.c_str(), kTestPort);
     if (!pCli) { std::printf("FATAL: ClientFactory failed.\n"); return 1; }
     oClient.PostP2PeerCon(pCli);
