@@ -2633,6 +2633,18 @@ target_link_libraries(p2p_wirecycle PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_wirecycle COMMAND p2p_wirecycle)
 set_tests_properties(p2p_wirecycle PROPERTIES TIMEOUT 120 LABELS security)
 
+# p2p_routeorder: which connection does RouteP2PeerMsg pick? The FIRST in posted
+# order that takes the destination, whatever the route index (p2p_performance
+# F-P4-10) asked. One hub, no transport: connections that record what the router
+# hands them - order ties both ways, an assigned and a directly written address,
+# a drop, a hub rename. No sockets, so no port and no RESOURCE_LOCK.
+#   STATUS: PASSES
+add_executable(p2p_routeorder p2p_routeorder.cpp)
+_mscs_test_common(p2p_routeorder)
+target_link_libraries(p2p_routeorder PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_routeorder COMMAND p2p_routeorder)
+set_tests_properties(p2p_routeorder PROPERTIES TIMEOUT 120)
+
 # The rest of the P0 performance suite (p2p_performance.md §3): B0 perf_floor,
 # B3 crypto_bench, and the benches still to come. A subdirectory so the suite is
 # one place; it applies its own loader path, since _mscs_apply_loader_path()
