@@ -2645,6 +2645,16 @@ target_link_libraries(p2p_routeorder PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_routeorder COMMAND p2p_routeorder)
 set_tests_properties(p2p_routeorder PROPERTIES TIMEOUT 120)
 
+# p2p_hubaddr: IsP2PmsgHubInProcess / ...SealWaivedInProcess against hubs created,
+# re-addressed, sharing an address and destroyed (p2p_performance F-P4-11). They
+# decide whether a body may go unsealed. No sockets, so no port.
+#   STATUS: PASSES
+add_executable(p2p_hubaddr p2p_hubaddr.cpp)
+_mscs_test_common(p2p_hubaddr)
+target_link_libraries(p2p_hubaddr PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_hubaddr COMMAND p2p_hubaddr)
+set_tests_properties(p2p_hubaddr PROPERTIES TIMEOUT 120 LABELS security)
+
 # The rest of the P0 performance suite (p2p_performance.md §3): B0 perf_floor,
 # B3 crypto_bench, and the benches still to come. A subdirectory so the suite is
 # one place; it applies its own loader path, since _mscs_apply_loader_path()
