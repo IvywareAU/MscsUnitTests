@@ -3068,8 +3068,302 @@ static void Test_FieldRef_CursorFirst()
     }
 }
 
+// ---------------------------------------------------------------------------
+// B2 (Msgcore 3.8.0): DeclareItem skips its "is this name new?" walk when the
+// container's name filter rules the name out (P2PmsgHeap_BumpShape,
+// MsgVBHeap.cpp). A filter that missed a change answers "new" for a name that
+// is there, and DeclareItem then appends a DUPLICATE -- silently in Release,
+// and as a NAME-FILTER-MISMATCH throw where the check is compiled in. So every
+// case below builds a container past the filter's 32-child threshold, changes
+// it by one route, declares the affected name, and requires exactly one child
+// of that name and no throw. One route per writer that bumps the stamp, so
+// removing any one bump fails a case (the mutation test).
+// ---------------------------------------------------------------------------
+namespace
+{
+template<class Coll>
+int NfCount ( Coll& oColl, LPCWSTR lpszName )
+{
+    int n = 0;
+    for ( int i = 0; oColl.r_Curs().Goto(i); ++i )
+      if ( oColl.r_Curs().r_item().r_name().c_wcsicmp(lpszName) == 0 )
+        ++n;
+    return n;
+}
+//  Runs fn; false when it threw (the check build's NAME-FILTER-MISMATCH),
+//  and says what was thrown, so a check that fires is seen to fire
+template<class Fn>
+bool NfRuns ( Fn fn )
+{
+    try { fn(); return true; }
+    catch ( P2Pevent *pEVT )
+    {
+        if ( pEVT )
+        {
+            const CString strMsg = pEVT->GetMessage();
+            printf ( "      threw: %ls\n", (LPCWSTR)strMsg );
+            pEVT->Cancel(false);
+        }
+        return false;
+    }
+    catch ( ... ) { printf ( "      threw: (not a P2Pevent)\n" ); return false; }
+}
+std::wstring NfName ( int i ) { wchar_t sz[16]; swprintf ( sz, 16, L"n%03d", i ); return sz; }
+//  40 children, declared: the walk past the 32nd files the filter
+template<class Coll>
+void NfFill ( Coll& oColl, int nCount = 40 )
+{
+    for ( int i = 0; i < nCount; ++i )
+      oColl.DeclareItem ( NfName(i).c_str(), P3PmsgData(i), FALSE );
+}
+}
+
+static void Test_NameFilter()
+{
+    TF_CASE("name filter: a build declares each name once, and redeclares find it")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Desc(), 100 );
+        TF_CHECK_EQ ( (int)m.r_Desc().GetCount(), 100 );
+        bool bOk = NfRuns ( [&]{
+            for ( int i = 0; i < 100; ++i )
+              m.r_Desc().DeclareItem ( NfName(i).c_str(), P3PmsgData(1000 + i), TRUE );
+        } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( (int)m.r_Desc().GetCount(), 100 );
+        TF_CHECK_EQ ( m.SelectItem(L"n000").c_int(), 1000 );
+        TF_CHECK_EQ ( m.SelectItem(L"N099").c_int(), 1099 );   // case-insensitive
+        TF_CHECK ( !m.Exists(L"n100") );
+        TF_CHECK ( !m.Exists(L"absent") );
+    }
+
+    TF_CASE("name filter: a sibling renamed to a new name is found (c_name)")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Desc() );
+        m.SelectItem(L"n007").r_name() = L"renamed";
+        bool bOk = NfRuns ( [&]{ m.r_Desc().DeclareItem ( L"renamed", P3PmsgData(77), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"renamed" ), 1 );
+        TF_CHECK_EQ ( (int)m.r_Desc().GetCount(), 40 );
+        TF_CHECK_EQ ( m.SelectItem(L"renamed").c_int(), 77 );
+        //  and the old name is new again
+        m.r_Desc().DeclareItem ( L"n007", P3PmsgData(7), FALSE );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"n007" ), 1 );
+        TF_CHECK_EQ ( (int)m.r_Desc().GetCount(), 41 );
+    }
+
+    TF_CASE("name filter: a same-length rename (no resize) is found, on a message heap too")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Desc() );
+        m.SelectItem(L"n007").r_name() = L"zz07";            // fits the old slot
+        bool bOk = NfRuns ( [&]{ m.r_Desc().DeclareItem ( L"zz07", P3PmsgData(77), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"zz07" ), 1 );
+
+        P3PmsgBSTR oMsg ( VBLock_Addr32, 4096 );
+        oMsg.InitItem ( VBLockBSTR_MSG, P3PmsgData ( (int)0 ) );
+        P3PmsgItem &oRoot = oMsg.r_item ( VBLockBSTR_MSG );
+        NfFill ( oRoot.r_Desc() );
+        oRoot.SelectItem(L"n008").r_name() = L"zz08";
+        bOk = NfRuns ( [&]{ oRoot.r_Desc().DeclareItem ( L"zz08", P3PmsgData(88), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( oRoot.r_Desc(), L"zz08" ), 1 );
+        //  and past its storage on this heap, where names are not laid out at
+        //  full capacity, so the long one is chained
+        const wchar_t *pszLong = L"a-much-longer-name-than-the-block-was-laid-out-for";
+        oRoot.SelectItem(L"n009").r_name() = pszLong;
+        oRoot.r_Desc().DeclareItem ( L"fresh", P3PmsgData(1), FALSE );   // files a filter
+        bOk = NfRuns ( [&]{ oRoot.r_Desc().DeclareItem ( pszLong, P3PmsgData(99), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( oRoot.r_Desc(), pszLong ), 1 );
+        TF_CHECK_EQ ( (int)oRoot.r_Desc().GetCount(), 41 );
+    }
+
+    TF_CASE("name filter: a sibling renamed past its storage (a chained name) is found")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Desc() );
+        const wchar_t *pszLong = L"a-much-longer-name-than-the-block-was-laid-out-for";
+        m.SelectItem(L"n011").r_name() = pszLong;
+        //  a miss walk over the changed container: it must not file a filter
+        //  that leaves the long name out
+        m.r_Desc().DeclareItem ( L"fresh", P3PmsgData(1), FALSE );
+        bool bOk = NfRuns ( [&]{ m.r_Desc().DeclareItem ( pszLong, P3PmsgData(11), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), pszLong ), 1 );
+        TF_CHECK_EQ ( (int)m.r_Desc().GetCount(), 41 );
+    }
+
+    TF_CASE("name filter: a child appended without DeclareItem is found (Desc link)")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Desc() );
+        m.r_Desc() += P3PmsgField ( L"pushed", P3PmsgData(5) );
+        bool bOk = NfRuns ( [&]{ m.r_Desc().DeclareItem ( L"pushed", P3PmsgData(55), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"pushed" ), 1 );
+        TF_CHECK_EQ ( m.SelectItem(L"pushed").c_int(), 55 );
+    }
+
+    TF_CASE("name filter: an attribute appended without DeclareItem is found (Attr link)")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Attr() );
+        TF_CHECK_EQ ( (int)m.r_Attr().GetCount(), 40 );
+        m.r_Attr() += P3PmsgField ( L"pushed", P3PmsgData(5) );
+        bool bOk = NfRuns ( [&]{ m.r_Attr().DeclareItem ( L"pushed", P3PmsgData(55), true ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( m.r_Attr(), L"pushed" ), 1 );
+        TF_CHECK_EQ ( (int)m.r_Attr().GetCount(), 41 );
+        //  and the attribute build itself declared each name once
+        bOk = NfRuns ( [&]{ for ( int i = 0; i < 40; ++i )
+                              m.r_Attr().DeclareItem ( NfName(i).c_str(), P3PmsgData(i), true ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( (int)m.r_Attr().GetCount(), 41 );
+    }
+
+    TF_CASE("name filter: a child appended through ANOTHER object is found")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        P3PmsgField f1 ( m.r_Object() ), f2 ( m.r_Object() );
+        NfFill ( f1.r_Desc() );
+        f2.r_Desc() += P3PmsgField ( L"other", P3PmsgData(3) );
+        bool bOk = NfRuns ( [&]{ f1.r_Desc().DeclareItem ( L"other", P3PmsgData(33), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( f1.r_Desc(), L"other" ), 1 );
+        //  and DeclareItem through the other object keeps the first one's filter honest
+        f2.r_Desc().DeclareItem ( L"other2", P3PmsgData(4), FALSE );
+        bOk = NfRuns ( [&]{ f1.r_Desc().DeclareItem ( L"other2", P3PmsgData(44), TRUE ); } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( f1.r_Desc(), L"other2" ), 1 );
+    }
+
+    TF_CASE("name filter: swapped, deleted and re-declared children stay single")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Desc() );
+        P3PmsgField &r1 = m.SelectItem(L"n003");
+        P3PmsgItem o1 ( r1.r_Object() );
+        P3PmsgItem o2 ( m.SelectItem(L"n030").r_Object() );
+        P2PmsgDesc_Swap ( o1, o2 );
+        TF_CHECK ( m.Delete(L"n020") );
+        bool bOk = NfRuns ( [&]{
+            m.r_Desc().DeclareItem ( L"n003", P3PmsgData(3), TRUE );
+            m.r_Desc().DeclareItem ( L"n030", P3PmsgData(30), TRUE );
+            m.r_Desc().DeclareItem ( L"n020", P3PmsgData(20), TRUE );
+            m.r_Desc().DeclareItem ( L"n020", P3PmsgData(21), TRUE );
+        } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"n003" ), 1 );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"n030" ), 1 );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"n020" ), 1 );
+        TF_CHECK_EQ ( m.SelectItem(L"n020").c_int(), 21 );
+        TF_CHECK_EQ ( (int)m.r_Desc().GetCount(), 40 );
+    }
+
+    TF_CASE("name filter: a container freed and replaced does not inherit a filter")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        for ( int round = 0; round < 4; ++round )
+        {
+            P3PmsgField &oSub = m.r_Desc().DeclareItem ( L"sub", P3PmsgData(0), FALSE );
+            NfFill ( oSub.r_Desc() );
+            //  a different set of names each round, so an inherited filter would
+            //  rule out names this container holds
+            for ( int i = 0; i < 8; ++i )
+              oSub.r_Desc() += P3PmsgField ( NfName(500 + round * 10 + i).c_str(), P3PmsgData(i) );
+            bool bOk = NfRuns ( [&]{
+                for ( int i = 0; i < 8; ++i )
+                  oSub.r_Desc().DeclareItem ( NfName(500 + round * 10 + i).c_str(), P3PmsgData(i), TRUE );
+            } );
+            TF_CHECK ( bOk );
+            TF_CHECK_EQ ( (int)oSub.r_Desc().GetCount(), 48 );
+            TF_CHECK ( m.Delete(L"sub") );
+        }
+    }
+
+    TF_CASE("name filter: two containers on one heap, built in turn")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        P3PmsgField &a = m.r_Desc().DeclareItem ( L"a", P3PmsgData(0), FALSE );
+        P3PmsgField oA ( a.r_Object() );
+        P3PmsgField &b = m.r_Desc().DeclareItem ( L"b", P3PmsgData(0), FALSE );
+        P3PmsgField oB ( b.r_Object() );
+        for ( int i = 0; i < 60; ++i )
+        {
+            oA.r_Desc().DeclareItem ( NfName(i).c_str(), P3PmsgData(i), FALSE );
+            oB.r_Desc().DeclareItem ( NfName(i).c_str(), P3PmsgData(-i), FALSE );
+            if ( i == 45 )                     // and one added to A behind its filter
+              oA.r_Desc() += P3PmsgField ( L"late", P3PmsgData(9) );
+        }
+        bool bOk = NfRuns ( [&]{
+            oA.r_Desc().DeclareItem ( L"late", P3PmsgData(99), TRUE );
+            oB.r_Desc().DeclareItem ( L"late", P3PmsgData(98), TRUE );
+        } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( (int)oA.r_Desc().GetCount(), 61 );
+        TF_CHECK_EQ ( (int)oB.r_Desc().GetCount(), 61 );
+        TF_CHECK_EQ ( oA.SelectItem(L"late").c_int(), 99 );
+        TF_CHECK_EQ ( oB.SelectItem(L"n059").c_int(), -59 );
+    }
+
+    TF_CASE("name filter: names it cannot judge still decide by the compare")
+    {
+        P2PmsgMgr m; m.r_name() = L"S";
+        NfFill ( m.r_Desc() );
+        //  a non-ASCII key appended behind a current filter, then ASCII and
+        //  non-ASCII keys again; Kelvin's ASCII spelling must agree with _wcsicmp
+        //  U+212A KELVIN SIGN lowers to 'k' where _wcsicmp folds Unicode
+        m.r_Desc().DeclareItem ( L"Größe", P3PmsgData(1), FALSE );
+        m.r_Desc().DeclareItem ( L"Kelvin", P3PmsgData(2), FALSE );
+        bool bOk = NfRuns ( [&]{
+            m.r_Desc().DeclareItem ( L"Größe", P3PmsgData(11), TRUE );
+            m.r_Desc().DeclareItem ( L"kelvin", P3PmsgData(22), TRUE );
+        } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( NfCount ( m.r_Desc(), L"Größe" ), 1 );
+        const bool bKelvinFolds = _wcsicmp(L"Kelvin", L"kelvin") == 0;
+        TF_CHECK_EQ ( (int)m.r_Desc().GetCount(), bKelvinFolds ? 42 : 43 );
+        TF_CHECK_EQ ( m.SelectItem(L"Größe").c_int(), 11 );
+    }
+
+    TF_CASE("name filter: a received message's children are declared once")
+    {
+        VBLsize nWire = 0;
+        char   *pWire = nullptr;
+        {
+            P3PmsgBSTR oSent ( VBLock_Addr32, 4096 );
+            oSent.InitItem ( VBLockBSTR_MSG, P3PmsgData ( (int)0 ) );
+            NfFill ( oSent.r_item(VBLockBSTR_MSG).r_Desc(), 64 );
+            pWire = WireCopy ( oSent, nWire );
+        }
+        P3PmsgBSTR oRecv ( *(const VBListIOmage *)pWire, nWire );
+        P3PmsgItem &oRoot = oRecv.r_item ( VBLockBSTR_MSG );
+        TF_CHECK ( !oRoot.Exists(L"absent") );              // the walk files a filter
+        oRoot.SelectItem(L"n040").r_name() = L"moved";
+        oRoot.r_Desc() += P3PmsgField ( L"added", P3PmsgData(1) );
+        bool bOk = NfRuns ( [&]{
+            for ( int i = 0; i < 64; ++i )
+              oRoot.r_Desc().DeclareItem ( NfName(i).c_str(), P3PmsgData(i), TRUE );
+            oRoot.r_Desc().DeclareItem ( L"moved", P3PmsgData(40), TRUE );
+            oRoot.r_Desc().DeclareItem ( L"added", P3PmsgData(2), TRUE );
+        } );
+        TF_CHECK ( bOk );
+        TF_CHECK_EQ ( (int)oRoot.r_Desc().GetCount(), 66 );   // n040 is new again
+        TF_CHECK_EQ ( NfCount ( oRoot.r_Desc(), L"moved" ), 1 );
+        TF_CHECK_EQ ( NfCount ( oRoot.r_Desc(), L"added" ), 1 );
+        delete [] pWire;
+    }
+}
+
 void RunMsgcoreSuite()
 {
+    //  A lookup outside a case's own NfRuns throws too when the check fires:
+    //  a failure, not the end of the run
+    if ( !NfRuns ( [] { Test_NameFilter(); } ) )
+      tf_fail ( __FILE__, __LINE__, "name filter: a lookup threw outside its check" );
     Test_Curs_StaleAfterForeignDelete();
     Test_FieldRef_CursorFirst();
     Test_FieldAccess_F0Facts();

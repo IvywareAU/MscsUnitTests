@@ -634,6 +634,23 @@ namespace
             std::printf ( "profile %s: %lld ops in %.2f s = %.0f ns/op\n", kase, ops, s, s * 1e9 / (double)ops );
             return ok ? 0 : 1;
         }
+        //  B2 (F-P4-12): the build_flat row alone - create, n declares, one lookup
+        if ( std::strcmp ( kase, "build_flat" ) == 0 )
+        {
+            auto t0 = std::chrono::steady_clock::now ( );
+            long long ops = 0;
+            bool ok = true;
+            while ( std::chrono::duration<double> ( std::chrono::steady_clock::now ( ) - t0 ).count ( ) < seconds )
+                for ( int i = 0; i < 16; ++i, ++ops )
+                {
+                    Msg m = NewMsg ( );
+                    Fill ( *m.root, n );
+                    ok &= m.root->SelectItem ( Name ( n - 1 ).c_str ( ) ).c_int ( ) == n - 1;
+                }
+            double s = std::chrono::duration<double> ( std::chrono::steady_clock::now ( ) - t0 ).count ( );
+            std::printf ( "profile %s n=%d: %lld ops in %.2f s = %.0f ns/op\n", kase, n, ops, s, s * 1e9 / (double)ops );
+            return ok ? 0 : 1;
+        }
 
         Msg m = NewMsg ( );
         Fill ( *m.root, n );
