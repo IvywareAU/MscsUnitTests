@@ -1842,6 +1842,22 @@ target_link_libraries(p2p_vnetmount PRIVATE targetcore msgcore p2pplatform)
 add_test(NAME p2p_vnetmount COMMAND p2p_vnetmount)
 set_tests_properties(p2p_vnetmount PROPERTIES TIMEOUT 120 LABELS security)
 
+# p2p_vnetsameroot: p2p_vnetmount's mount between two networks that are BOTH
+# rooted at Root, with the far service at the sender's own full address
+# (Root.L.Leaf on both sides). Each side addresses the other only through the
+# qualifier (Root.Mid.Gate:Root.L.Leaf out, Root:Root.L.Leaf in), and an
+# unqualified Root.L.Leaf must stay in its own network. Same posture: DMX,
+# auth, seal and relay auth on, no link closed. Root.Root shares the mount's
+# route-index key, so it alone catches a mount that over-claims. No sockets,
+# no RESOURCE_LOCK.
+#   STATUS: PASSES        (measured 2026-11-29: Windows Debug, Linux Debug and
+#                          TSan; mutation-checked, 6 of 6 mutants killed)
+add_executable(p2p_vnetsameroot p2p_vnetsameroot.cpp)
+_mscs_test_common(p2p_vnetsameroot)
+target_link_libraries(p2p_vnetsameroot PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_vnetsameroot COMMAND p2p_vnetsameroot)
+set_tests_properties(p2p_vnetsameroot PROPERTIES TIMEOUT 120 LABELS security)
+
 # p2p_hubdtorreport: ~P2PeerHub REPORTS a hub destroyed with its spawned pump
 # still running (F-TSAN-2) - and must not abort while doing it. Until Targetcore
 # 3.4.1 the report was one P2Pevent::Message() of ~320 characters, and Msgcore
