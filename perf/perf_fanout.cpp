@@ -59,6 +59,8 @@
 //   PERF_WAIVE=0          WaiveEndToEndInProcess(false) on every hub: the
 //                         default before Targetcore 3.6.0. Unset = the library
 //                         default (on since 3.6.0). Only a Dmx chain differs.
+//   PERF_SEAL_MODE=msg|ctx  default msg (v2). ctx: the origin seals v3
+//                         context bodies (T1d, Targetcore 3.12.0); needs D or E.
 //   PERF_TRANSPORT=wsa|dmx  chain only (fan is wsa: one listener is the shape
 //                         under test; Dmx needs a service per peer, which
 //                         would double the list the route walks).
@@ -173,6 +175,8 @@ static bool Provision(const std::vector<std::wstring>& vAddr)
     return true;
 }
 
+static bool g_bSealCtx = false;   // PERF_SEAL_MODE=ctx
+
 static bool ApplyPosture(P2PeerHub& hub, Role eRole)
 {
     const Posture& p = *g_pPost;
@@ -201,6 +205,14 @@ static bool ApplyPosture(P2PeerHub& hub, Role eRole)
     {
         if (hub.SetAgreementKey(g_sAgr.c_str()) != p2pcng::IdOk) return false;
         if (eRole == RoleOrigin ? !hub.CanSeal() : !hub.CanOpen()) return false;
+        // PERF_SEAL_MODE=ctx: the origin seals v3 context bodies (T1d,
+        // Targetcore 3.12.0) at the default bounds. Read back, so a mode that
+        // did not take fails as "posture did not take" rather than timing v2.
+        if (eRole == RoleOrigin && g_bSealCtx)
+        {
+            hub.SealModeOutbound(p2pseal::SealMode_Context);
+            if (hub.GetSealModeOutbound() != p2pseal::SealMode_Context) return false;
+        }
     }
     if (p.bOpen)
     {
@@ -560,6 +572,18 @@ int main(int argc, char* argv[])
     {
         g_tag += "/waive=0";
         std::printf("PERF_WAIVE=0: WaiveEndToEndInProcess(false), the pre-3.6.0 default\n");
+    }
+    if (const char* sm = std::getenv("PERF_SEAL_MODE"); sm && *sm)
+    {
+        std::string s = sm;
+        if (s == "ctx") g_bSealCtx = true;
+        else if (s != "msg") { std::printf("FATAL: PERF_SEAL_MODE=%s (want msg|ctx).\n", sm); return 1; }
+        if (g_bSealCtx)
+        {
+            if (!g_pPost->bSeal) { std::printf("FATAL: PERF_SEAL_MODE=ctx needs a sealing posture (D or E).\n"); return 1; }
+            g_tag += "/seal=ctx";
+            std::printf("PERF_SEAL_MODE=ctx: the origin seals v3 context bodies (default bounds)\n");
+        }
     }
     std::fflush(stdout);
 

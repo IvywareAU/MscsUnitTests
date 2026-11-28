@@ -348,6 +348,8 @@ static int Emit ( const char *pszPath )
 }
 
 // ================================================================== verify
+static int Verify3 ( const Vec &oVec );   // the v3 vector, below
+
 static int Verify ( const char *pszPath )
 {
     using namespace p2pcng;
@@ -361,8 +363,16 @@ static int Verify ( const char *pszPath )
 
     std::string sProducer = "(unknown)";
     Field ( oVec, "producer", sProducer );
-    std::printf ( "  %s  [sealed by %s, opening on %s]\n",
-                  pszPath, sProducer.c_str ( ), BackendTag ( ) );
+    std::string sVersion = "1";
+    Field ( oVec, "version", sVersion );
+    std::printf ( "  %s  [v%s, sealed by %s, opening on %s]\n",
+                  pszPath, sVersion.c_str ( ), sProducer.c_str ( ), BackendTag ( ) );
+    if ( sVersion == "3" ) return Verify3 ( oVec );
+    if ( sVersion != "1" )
+    {
+        std::printf ( "  ! vector format %s is not one this test reads\n", sVersion.c_str ( ) );
+        return 2;
+    }
 
     std::vector<unsigned char> vSrc, vDst, vPlain, vSealed, vContainer;
     std::vector<unsigned char> vSenderPriv, vSenderPub, vRecipPriv, vRecipPub;
@@ -518,6 +528,322 @@ static int Verify ( const char *pszPath )
     return 0;
 }
 
+// ================================================================== v3 (T1d)
+//  The context mode, Targetcore 3.12.0. A v3 body adds two things a backend
+//  could get wrong on its own and still pass every test it runs alone:
+//
+//   * the wrapping key is derived ONCE per (context, reader) and reused, by
+//     both ends, from HKDF over an ECDH the two backends compute separately;
+//   * the 8-byte seq is bound into the slot tag, the key wrap, the body's AAD
+//     and the signature, so the four places must serialise it identically.
+//
+//  So the vector carries TWO bodies from ONE context, sealed to TWO readers.
+//  The second body is the one that matters: the receiver opens it with the
+//  key it cached from the first, which is the path the whole mode exists for,
+//  and a cross-backend disagreement there would be invisible to a vector that
+//  carried a single body. v3 vectors are separate files with "version 3", so
+//  the frozen v1 pair is read exactly as it always was.
+static const char kPlain3a[] = "v3: first body of one context, seq 0";
+static const char kPlain3b[] = "v3: second body, seq 1 \xE2\x80\x94 opened with the cached key";
+
+//  Offsets into a v3 body; the layout is P2PeerSeal.h's and is restated here
+//  only so that a format disagreement shows up as a named check.
+static const size_t kOff3Ctx = p2pseal::kSealVerLen + p2pseal::kSealTimeLen;
+static const size_t kOff3Seq = kOff3Ctx + p2pseal::kSealEphLen;
+static const size_t kOff3Cnt = kOff3Seq + p2pseal::kSealSeqLen;
+
+static int Emit3 ( const char *pszPath )
+{
+    using namespace p2pcng;
+
+    EcdsaP256 oSender;
+    EcdhP256  oR0, oR1;
+    if ( !oSender.Generate ( ) || !oR0.Generate ( ) || !oR1.Generate ( ) )
+    {
+        std::printf ( "  ! keygen failed\n" );
+        return 2;
+    }
+    unsigned char senderPriv[kEcdsaPrivLen], senderPub[kEcdsaPubLen];
+    unsigned char r0Priv[kEcdhPrivLen], r1Priv[kEcdhPrivLen];
+    unsigned char aReaders[2 * kEcdhPubLen];
+    if ( !oSender.ExportPrivate ( senderPriv ) || !oSender.ExportPublic ( senderPub ) ||
+         !oR0.ExportPrivate ( r0Priv ) || !oR0.ExportPublic ( aReaders ) ||
+         !oR1.ExportPrivate ( r1Priv ) || !oR1.ExportPublic ( aReaders + kEcdhPubLen ) )
+    {
+        std::printf ( "  ! key export failed\n" );
+        return 2;
+    }
+
+    std::vector<unsigned char> vSrc ( kSrcUtf8, kSrcUtf8 + std::strlen ( kSrcUtf8 ) );
+    std::vector<unsigned char> vDst ( kDstUtf8, kDstUtf8 + std::strlen ( kDstUtf8 ) );
+    std::wstring wSrc, wDst;
+    if ( !WideFromUtf8 ( vSrc, wSrc ) || !WideFromUtf8 ( vDst, wDst ) )
+    {
+        std::printf ( "  ! address transcode failed\n" );
+        return 2;
+    }
+
+    p2pseal::SealContext oCtx;
+    EcdhP256 *const      apKeys[2] = { nullptr, nullptr };   // imported per call, as SealTo does
+    const char          *apPlain[2] = { kPlain3a, kPlain3b };
+    std::vector<unsigned char> avSealed[2];
+    for ( int m = 0; m < 2; ++m )
+    {
+        const size_t cbPlain = std::strlen ( apPlain[m] );
+        avSealed[m].resize ( p2pseal::SealedSizeV3 ( cbPlain, 2 ) );
+        size_t cb = 0;
+        p2pseal::SealResult e =
+            p2pseal::SealToContext ( oCtx, oSender, aReaders, apKeys, 2,
+                                     wSrc.c_str ( ), wDst.c_str ( ), apPlain[m], cbPlain,
+                                     avSealed[m].data ( ), avSealed[m].size ( ), &cb );
+        if ( e != p2pseal::SealOk )
+        {
+            std::printf ( "  ! SealToContext failed: %s\n", p2pseal::SealResultText ( e ) );
+            return 2;
+        }
+        avSealed[m].resize ( cb );
+    }
+    if ( oCtx.Generations ( ) != 1 )
+    {
+        std::printf ( "  ! the two bodies did not share one context\n" );
+        return 2;
+    }
+
+    std::FILE *f = std::fopen ( pszPath, "wb" );
+    if ( !f ) { std::printf ( "  ! cannot write %s\n", pszPath ); return 2; }
+    std::fprintf ( f, "# Copyright \xC2\xA9 2026 Khrustal & Mann\n"
+                      "#              MELBOURNE, VICTORIA, AUSTRALIA, 3000\n"
+                      "# Licensed under the Apache License, Version 2.0. "
+                      "See LICENSE for the full text.\n"
+                      "#\n" );
+    std::fprintf ( f, "# p2pseal cross-backend interop vector, format v3 (context mode)\n" );
+    std::fprintf ( f, "# Sealed by the %s backend. Every other backend must open it.\n", BackendTag ( ) );
+    std::fprintf ( f, "# Two bodies of ONE context (seq 0 and 1), each to TWO readers.\n" );
+    std::fprintf ( f, "# Keys are throwaway and deliberately in the clear - a vector\n"
+                      "# nobody can open proves nothing.\n" );
+    std::fprintf ( f, "version 3\n" );
+    std::fprintf ( f, "producer %s\n", BackendTag ( ) );
+    std::fprintf ( f, "src_utf8 %s\n",    Hex ( vSrc.data ( ), vSrc.size ( ) ).c_str ( ) );
+    std::fprintf ( f, "dst_utf8 %s\n",    Hex ( vDst.data ( ), vDst.size ( ) ).c_str ( ) );
+    std::fprintf ( f, "plain0 %s\n",      Hex ( (const unsigned char *)kPlain3a, std::strlen ( kPlain3a ) ).c_str ( ) );
+    std::fprintf ( f, "plain1 %s\n",      Hex ( (const unsigned char *)kPlain3b, std::strlen ( kPlain3b ) ).c_str ( ) );
+    std::fprintf ( f, "sender_priv %s\n", Hex ( senderPriv, kEcdsaPrivLen ).c_str ( ) );
+    std::fprintf ( f, "sender_pub %s\n",  Hex ( senderPub,  kEcdsaPubLen  ).c_str ( ) );
+    std::fprintf ( f, "reader0_priv %s\n", Hex ( r0Priv, kEcdhPrivLen ).c_str ( ) );
+    std::fprintf ( f, "reader0_pub %s\n",  Hex ( aReaders, kEcdhPubLen ).c_str ( ) );
+    std::fprintf ( f, "reader1_priv %s\n", Hex ( r1Priv, kEcdhPrivLen ).c_str ( ) );
+    std::fprintf ( f, "reader1_pub %s\n",  Hex ( aReaders + kEcdhPubLen, kEcdhPubLen ).c_str ( ) );
+    std::fprintf ( f, "sealed0 %s\n",     Hex ( avSealed[0].data ( ), avSealed[0].size ( ) ).c_str ( ) );
+    std::fprintf ( f, "sealed1 %s\n",     Hex ( avSealed[1].data ( ), avSealed[1].size ( ) ).c_str ( ) );
+    std::fclose ( f );
+
+    std::printf ( "  wrote %s (%s, v3, two bodies of %u and %u bytes, two readers)\n",
+                  pszPath, BackendTag ( ),
+                  (unsigned)avSealed[0].size ( ), (unsigned)avSealed[1].size ( ) );
+    return 0;
+}
+
+//  One open, with or without a cache, compared against the expected plaintext.
+static p2pseal::SealResult Open3 ( p2pcng::EcdhP256 &oReader, p2pcng::EcdsaP256 &oSenderKey,
+                                   p2pseal::OpenContextCache *pCache, bool bAccept,
+                                   const std::wstring &wSrc, const std::wstring &wDst,
+                                   const std::vector<unsigned char> &vSealed,
+                                   const std::vector<unsigned char> *pvPlain, bool *pbMatch )
+{
+    std::vector<unsigned char> vOut ( p2pseal::OpenedSize ( vSealed.size ( ) ) + 1 );
+    size_t cbOut = 0;
+    p2pseal::SealResult e =
+        p2pseal::OpenKeyedCtx ( oReader, oSenderKey, pCache, bAccept,
+                                wSrc.c_str ( ), wDst.c_str ( ),
+                                vSealed.data ( ), vSealed.size ( ),
+                                vOut.data ( ), vOut.size ( ), &cbOut );
+    if ( pbMatch )
+        *pbMatch = e == p2pseal::SealOk && pvPlain && cbOut == pvPlain -> size ( ) &&
+                   std::memcmp ( vOut.data ( ), pvPlain -> data ( ), cbOut ) == 0;
+    return e;
+}
+
+static int Verify3 ( const Vec &oVec )
+{
+    using namespace p2pcng;
+    using p2pseal::SealResult;
+
+    std::vector<unsigned char> vSrc, vDst, avPlain[2], avSealed[2];
+    std::vector<unsigned char> vSenderPriv, vSenderPub, avRPriv[2], avRPub[2];
+    if ( !FieldBytes ( oVec, "src_utf8",     vSrc ) ||
+         !FieldBytes ( oVec, "dst_utf8",     vDst ) ||
+         !FieldBytes ( oVec, "plain0",       avPlain[0] ) ||
+         !FieldBytes ( oVec, "plain1",       avPlain[1] ) ||
+         !FieldBytes ( oVec, "sealed0",      avSealed[0] ) ||
+         !FieldBytes ( oVec, "sealed1",      avSealed[1] ) ||
+         !FieldBytes ( oVec, "sender_priv",  vSenderPriv, kEcdsaPrivLen ) ||
+         !FieldBytes ( oVec, "sender_pub",   vSenderPub,  kEcdsaPubLen  ) ||
+         !FieldBytes ( oVec, "reader0_priv", avRPriv[0],  kEcdhPrivLen  ) ||
+         !FieldBytes ( oVec, "reader0_pub",  avRPub[0],   kEcdhPubLen   ) ||
+         !FieldBytes ( oVec, "reader1_priv", avRPriv[1],  kEcdhPrivLen  ) ||
+         !FieldBytes ( oVec, "reader1_pub",  avRPub[1],   kEcdhPubLen   ) )
+    {
+        std::printf ( "  ! malformed v3 vector\n" );
+        return 2;
+    }
+    for ( int m = 0; m < 2; ++m )
+        if ( avSealed[m].size ( ) != p2pseal::SealedSizeV3 ( avPlain[m].size ( ), 2 ) )
+        {
+            std::printf ( "  ! sealed%d is not a two-reader v3 body of its plaintext\n", m );
+            return 2;
+        }
+
+    std::wstring wSrc, wDst;
+    if ( !WideFromUtf8 ( vSrc, wSrc ) || !WideFromUtf8 ( vDst, wDst ) )
+    {
+        std::printf ( "  ! address transcode failed\n" );
+        return 2;
+    }
+
+    EcdhP256  aoR[2];
+    EcdsaP256 oSenderKey;
+    if ( !aoR[0].ImportPrivate ( avRPriv[0].data ( ) ) ||
+         !aoR[1].ImportPrivate ( avRPriv[1].data ( ) ) ||
+         !oSenderKey.ImportPublic ( vSenderPub.data ( ) ) )
+    {
+        CHECK ( false, "import the foreign reader keys and the sender's point" );
+        return 1;
+    }
+
+    //  1. The layout both ends claim: version 3, one context point, seq 0 then
+    //     1 big-endian, two readers. Read without a key, so a disagreement here
+    //     is named as a format fault rather than surfacing as a failed tag.
+    {
+        const unsigned char *a = avSealed[0].data ( ), *b = avSealed[1].data ( );
+        bool bOk = a[0] == p2pseal::kSealVersion3 && b[0] == p2pseal::kSealVersion3 &&
+                   std::memcmp ( a + kOff3Ctx, b + kOff3Ctx, p2pseal::kSealEphLen ) == 0 &&
+                   a[kOff3Cnt] == 2 && b[kOff3Cnt] == 2 &&
+                   p2pseal::SealReaderCount ( a, avSealed[0].size ( ) ) == 2;
+        for ( size_t i = 0; bOk && i < p2pseal::kSealSeqLen; ++i )
+            bOk = a[kOff3Seq + i] == 0 &&
+                  b[kOff3Seq + i] == ( i + 1 == p2pseal::kSealSeqLen ? 1 : 0 );
+        CHECK ( bOk, "v3 layout: one context point, seq 0 then 1, two readers" );
+    }
+
+    //  2. THE claim, per reader: the first body opens and derives the key, the
+    //     second opens on the key cached from the first. Hits/Misses make the
+    //     second open's path observable - without them a cache that silently
+    //     re-derived would pass.
+    p2pseal::OpenContextCache aoCache[2];
+    for ( int r = 0; r < 2; ++r )
+    {
+        bool b0 = false, b1 = false;
+        const SealResult e0 = Open3 ( aoR[r], oSenderKey, &aoCache[r], true, wSrc, wDst,
+                                      avSealed[0], &avPlain[0], &b0 );
+        const SealResult e1 = Open3 ( aoR[r], oSenderKey, &aoCache[r], true, wSrc, wDst,
+                                      avSealed[1], &avPlain[1], &b1 );
+        if ( e0 != p2pseal::SealOk ) std::printf ( "      seq 0 said: %s\n", p2pseal::SealResultText ( e0 ) );
+        if ( e1 != p2pseal::SealOk ) std::printf ( "      seq 1 said: %s\n", p2pseal::SealResultText ( e1 ) );
+        const bool bPath = aoCache[r].Misses ( ) == 1 && aoCache[r].Hits ( ) == 1;
+        CHECK ( b0 && b1 && bPath,
+                r == 0 ? "reader 0 opens seq 0 (derive) and seq 1 (cached key)"
+                       : "reader 1 opens seq 0 (derive) and seq 1 (cached key)" );
+    }
+
+    //  3. The window on seq, across backends: seq 0 again is a replay.
+    {
+        const SealResult e = Open3 ( aoR[0], oSenderKey, &aoCache[0], true, wSrc, wDst,
+                                     avSealed[0], nullptr, nullptr );
+        CHECK ( e == p2pseal::SealErrReplay, "seq 0 offered again is refused as a replay" );
+    }
+
+    //  4. No cache at all: one ECDH, as v2 - and the plain Open entry point.
+    {
+        std::vector<unsigned char> vOut ( p2pseal::OpenedSize ( avSealed[1].size ( ) ) + 1 );
+        size_t cbOut = 0;
+        const SealResult e =
+            p2pseal::Open ( aoR[1], vSenderPub.data ( ), wSrc.c_str ( ), wDst.c_str ( ),
+                            avSealed[1].data ( ), avSealed[1].size ( ),
+                            vOut.data ( ), vOut.size ( ), &cbOut );
+        CHECK ( e == p2pseal::SealOk && cbOut == avPlain[1].size ( ) &&
+                std::memcmp ( vOut.data ( ), avPlain[1].data ( ), cbOut ) == 0,
+                "seq 1 opens statelessly, with no cache" );
+    }
+
+    //  5. The seq is bound in. Its low byte changed - 1 becomes 0, a value the
+    //     window has not seen in a fresh cache - must not open.
+    {
+        std::vector<unsigned char> vBad = avSealed[1];
+        vBad[ kOff3Seq + p2pseal::kSealSeqLen - 1 ] ^= 0x01;
+        p2pseal::OpenContextCache oFresh;
+        const SealResult e = Open3 ( aoR[0], oSenderKey, &oFresh, true, wSrc, wDst,
+                                     vBad, nullptr, nullptr );
+        CHECK ( e != p2pseal::SealOk && oFresh.Entries ( ) == 0,
+                "a body with its seq altered is refused and caches nothing" );
+    }
+
+    //  6. Anti-downgrade: the same bytes relabelled v2 must not open as v2.
+    {
+        std::vector<unsigned char> vBad = avSealed[0];
+        vBad[0] = p2pseal::kSealVersion;
+        const SealResult e = Open3 ( aoR[0], oSenderKey, nullptr, true, wSrc, wDst,
+                                     vBad, nullptr, nullptr );
+        CHECK ( e != p2pseal::SealOk, "a v3 body relabelled v2 is refused" );
+    }
+
+    //  7. A reader that asked for per-message forward secrecy declines it, by
+    //     policy and with its own code.
+    {
+        const SealResult e = Open3 ( aoR[0], oSenderKey, nullptr, false, wSrc, wDst,
+                                     avSealed[0], nullptr, nullptr );
+        CHECK ( e == p2pseal::SealErrContextRefused,
+                "a reader not accepting context bodies refuses it (SealErrContextRefused)" );
+    }
+
+    //  8. Someone not named: intact body, not ours.
+    {
+        EcdhP256 oOutsider;
+        const SealResult e = oOutsider.Generate ( )
+            ? Open3 ( oOutsider, oSenderKey, nullptr, true, wSrc, wDst, avSealed[0], nullptr, nullptr )
+            : p2pseal::SealErrInternal;
+        CHECK ( e == p2pseal::SealErrNotAReader, "a peer not named is told SealErrNotAReader" );
+    }
+
+    //  9. Seal HERE in context mode with the foreign keys, two bodies, and let
+    //     both foreign readers open both: the producing direction of this
+    //     backend against keys it did not generate.
+    {
+        EcdsaP256 oSender;
+        bool bOk = oSender.ImportPrivate ( vSenderPriv.data ( ) );
+        unsigned char aReaders[2 * kEcdhPubLen];
+        std::memcpy ( aReaders, avRPub[0].data ( ), kEcdhPubLen );
+        std::memcpy ( aReaders + kEcdhPubLen, avRPub[1].data ( ), kEcdhPubLen );
+        p2pseal::SealContext oCtx;
+        EcdhP256 *const apKeys[2] = { nullptr, nullptr };
+        std::vector<unsigned char> avNew[2];
+        for ( int m = 0; bOk && m < 2; ++m )
+        {
+            avNew[m].resize ( p2pseal::SealedSizeV3 ( avPlain[m].size ( ), 2 ) );
+            size_t cb = 0;
+            bOk = p2pseal::SealToContext ( oCtx, oSender, aReaders, apKeys, 2,
+                                           wSrc.c_str ( ), wDst.c_str ( ),
+                                           avPlain[m].data ( ), avPlain[m].size ( ),
+                                           avNew[m].data ( ), avNew[m].size ( ), &cb )
+                      == p2pseal::SealOk;
+            avNew[m].resize ( cb );
+        }
+        for ( int r = 0; bOk && r < 2; ++r )
+        {
+            p2pseal::OpenContextCache oCache;
+            for ( int m = 0; bOk && m < 2; ++m )
+            {
+                bool bMatch = false;
+                Open3 ( aoR[r], oSenderKey, &oCache, true, wSrc, wDst, avNew[m], &avPlain[m], &bMatch );
+                bOk = bMatch;
+            }
+            bOk = bOk && oCache.Hits ( ) == 1;
+        }
+        CHECK ( bOk, "re-seal here in context mode with the foreign keys; both readers open both" );
+    }
+
+    return 0;
+}
+
 // ================================================================== main
 int main ( int argc, char **argv )
 {
@@ -525,6 +851,12 @@ int main ( int argc, char **argv )
     {
         std::printf ( "=== seal_interop emit (%s) ===\n", BackendTag ( ) );
         return Emit ( argv[2] );
+    }
+
+    if ( argc >= 3 && std::strcmp ( argv[1], "emit3" ) == 0 )
+    {
+        std::printf ( "=== seal_interop emit3 (%s) ===\n", BackendTag ( ) );
+        return Emit3 ( argv[2] );
     }
 
     if ( argc >= 3 && std::strcmp ( argv[1], "verify" ) == 0 )
@@ -543,7 +875,8 @@ int main ( int argc, char **argv )
         return g_fail == 0 ? 0 : 1;
     }
 
-    std::printf ( "usage: seal_interop emit   <vector-file>\n"
+    std::printf ( "usage: seal_interop emit   <vector-file>    (v1 body)\n"
+                  "       seal_interop emit3  <vector-file>    (v3 context bodies)\n"
                   "       seal_interop verify <vector-file> [<vector-file> ...]\n" );
     return 2;
 }

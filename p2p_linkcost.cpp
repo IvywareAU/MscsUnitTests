@@ -329,6 +329,14 @@ static std::string g_sMidKey,                g_sMidAcl;
 static std::string g_sBenchAKey, g_sBenchAAgr, g_sBenchAAcl;
 static std::string g_sBenchCKey, g_sBenchCAgr, g_sBenchCAcl;
 
+//  Part 2's multi-reader rows: Carol plus these three = 4 readers, half of
+//  kSealMaxReaders and what a destination plus three named relays looks like.
+static const int      kBenchExtra = 3;
+static const char    *kBenchExtraUtf8[kBenchExtra] =
+{ "Bench.Reader1",  "Bench.Reader2",  "Bench.Reader3"  };
+static const wchar_t *kBenchExtraW[kBenchExtra] =
+{ L"Bench.Reader1", L"Bench.Reader2", L"Bench.Reader3" };
+
 static bool Provision ( )
 {
     g_sAliceKey  = TempPath ( "alicekey"  );
@@ -388,6 +396,22 @@ static bool Provision ( )
          p2pcng::AppendAllowList ( g_sBenchCAcl.c_str ( ), "Bench.Alice",
                                    idAlice, agrAlice ) != p2pcng::IdOk )
     { Log ( "SETUP: bench allow-list failed" ); return false; }
+
+    //  The extra readers part 2's multi-reader rows seal to. Only their public
+    //  points exist: nothing ever opens as them, and Carol - reader 0 - opens
+    //  the multi-reader bodies, so the open rows price finding one's own slot
+    //  among several.
+    for ( int r = 0; r < kBenchExtra; ++r )
+    {
+      p2pcng::EcdsaP256 oId;
+      p2pcng::EcdhP256  oAgr;
+      unsigned char     id[p2pcng::kEcdsaPubLen], agr[p2pcng::kEcdhPubLen];
+      if ( !oId.Generate ( ) || !oAgr.Generate ( ) ||
+           !oId.ExportPublic ( id ) || !oAgr.ExportPublic ( agr ) ||
+           p2pcng::AppendAllowList ( g_sBenchAAcl.c_str ( ), kBenchExtraUtf8[r],
+                                     id, agr ) != p2pcng::IdOk )
+      { Log ( "SETUP: extra reader provisioning failed" ); return false; }
+    }
 
     return true;
 }
@@ -730,6 +754,65 @@ static bool RunPosture ( int nIx, long nCount, Result *pOut )
 //         and it can only see a seal and an open bundled into one round trip.
 //         These four loops are what generalises to a tree of another shape
 // =========================================================================
+//  nIter seals by Alice in whatever mode and reader set she holds now, then
+//  Carol opens every one. The row reports the body's version byte and its
+//  reader count, read off the first body: without them a context row that
+//  quietly stayed v2, or a 4-reader row sealed to one, would print a number
+//  indistinguishable from a real one.
+static void SealOpenRows ( P2PeerHub &oA, P2PeerHub &oC,
+                           const std::vector<unsigned char> &vBody, long nIter,
+                           const char *pszSeal, const char *pszOpen )
+{
+    const size_t cbRoom = p2pseal::SealedSizeV3 ( g_cbBody, p2pseal::kSealMaxReaders );
+    std::vector< std::vector<unsigned char> > vSealed;
+    vSealed.reserve ( (size_t)nIter );
+
+    double dW0 = WallSeconds ( ), dC0 = CpuSeconds ( );
+    long   nBad = 0;
+    for ( long i = 0; i < nIter; ++i )
+    {
+      std::vector<unsigned char> v ( cbRoom );
+      size_t cb = 0;
+      if ( oA.SealFor ( L"Bench.Alice", L"Bench.Carol", &vBody[0], g_cbBody,
+                        &v[0], cbRoom, &cb ) != p2pseal::SealOk )
+      { ++nBad; continue; }
+      v.resize ( cb );
+      vSealed.push_back ( v );
+    }
+    double dW1 = WallSeconds ( ), dC1 = CpuSeconds ( );
+    const unsigned nVer = vSealed.empty ( ) ? 0 : vSealed[0][0];
+    const unsigned nRdr = vSealed.empty ( ) ? 0
+        : (unsigned)p2pseal::SealReaderCount ( &vSealed[0][0], vSealed[0].size ( ) );
+    std::printf ( "[linkcost]   %-14s%8.1f us wall  %8.1f us CPU  per call"
+                  "  (%ld refused, %u -> %u bytes, v%u, %u reader%s)\n",
+                  pszSeal,
+                  ( dW1 - dW0 ) * 1e6 / (double)nIter,
+                  ( dC1 - dC0 ) * 1e6 / (double)nIter, nBad,
+                  (unsigned)g_cbBody,
+                  (unsigned)( vSealed.empty ( ) ? 0 : vSealed[0].size ( ) ),
+                  nVer, nRdr, nRdr == 1 ? "" : "s" );
+    std::fflush ( stdout );
+
+    dW0 = WallSeconds ( ); dC0 = CpuSeconds ( ); nBad = 0;
+    for ( size_t i = 0; i < vSealed.size ( ); ++i )
+    {
+      std::vector<unsigned char> vPlain ( p2pseal::OpenedSize ( vSealed[i].size ( ) ) + 1 );
+      size_t cb = 0;
+      if ( oC.OpenFrom ( L"Bench.Alice", L"Bench.Carol",
+                         &vSealed[i][0], vSealed[i].size ( ),
+                         &vPlain[0], vPlain.size ( ), &cb ) != p2pseal::SealOk )
+        ++nBad;
+    }
+    dW1 = WallSeconds ( ); dC1 = CpuSeconds ( );
+    if ( !vSealed.empty ( ) )
+      std::printf ( "[linkcost]   %-14s%8.1f us wall  %8.1f us CPU  per call"
+                    "  (%ld refused)\n",
+                    pszOpen,
+                    ( dW1 - dW0 ) * 1e6 / (double)vSealed.size ( ),
+                    ( dC1 - dC0 ) * 1e6 / (double)vSealed.size ( ), nBad );
+    std::fflush ( stdout );
+}
+
 static void RunPrimitives ( long nIter )
 {
     std::printf ( "\n--- part 2: the primitives, %ld iterations each ---\n", nIter );
@@ -800,49 +883,27 @@ static void RunPrimitives ( long nIter )
                     ( dC1 - dC0 ) * 1e6 / (double)vBlocks.size ( ), nBad );
     std::fflush ( stdout );
 
-    // ---- seal --------------------------------------------------------------
-    const size_t cbRoom = p2pseal::SealedSize ( g_cbBody, p2pseal::kSealMaxReaders );
-    std::vector< std::vector<unsigned char> > vSealed;
-    vSealed.reserve ( (size_t)nIter );
+    // ---- seal / open, both modes, one reader and four (T1d) ------------------
+    //  The first pair keeps the labels it always had, so a log from before
+    //  3.12.0 compares line for line. Context bodies carry a distinct seq
+    //  each, so Carol's replay window never refuses one here; a refusal
+    //  printed against a ctx row is a fault, not a cost.
+    SealOpenRows ( oA, oC, vBody, nIter, "SealFor",       "OpenFrom"       );
 
-    dW0 = WallSeconds ( ); dC0 = CpuSeconds ( ); nBad = 0;
-    for ( long i = 0; i < nIter; ++i )
-    {
-      std::vector<unsigned char> v ( cbRoom );
-      size_t cb = 0;
-      if ( oA.SealFor ( L"Bench.Alice", L"Bench.Carol", &vBody[0], g_cbBody,
-                        &v[0], cbRoom, &cb ) != p2pseal::SealOk )
-      { ++nBad; continue; }
-      v.resize ( cb );
-      vSealed.push_back ( v );
-    }
-    dW1 = WallSeconds ( ); dC1 = CpuSeconds ( );
-    std::printf ( "[linkcost]   SealFor       %8.1f us wall  %8.1f us CPU  per call"
-                  "  (%ld refused, %u -> %u bytes)\n",
-                  ( dW1 - dW0 ) * 1e6 / (double)nIter,
-                  ( dC1 - dC0 ) * 1e6 / (double)nIter, nBad,
-                  (unsigned)g_cbBody,
-                  (unsigned)( vSealed.empty ( ) ? 0 : vSealed[0].size ( ) ) );
-    std::fflush ( stdout );
+    oA.SealModeOutbound ( p2pseal::SealMode_Context );
+    SealOpenRows ( oA, oC, vBody, nIter, "SealFor/ctx",   "OpenFrom/ctx"   );
 
-    // ---- open --------------------------------------------------------------
-    dW0 = WallSeconds ( ); dC0 = CpuSeconds ( ); nBad = 0;
-    for ( size_t i = 0; i < vSealed.size ( ); ++i )
-    {
-      std::vector<unsigned char> vPlain ( p2pseal::OpenedSize ( vSealed[i].size ( ) ) + 1 );
-      size_t cb = 0;
-      if ( oC.OpenFrom ( L"Bench.Alice", L"Bench.Carol",
-                         &vSealed[i][0], vSealed[i].size ( ),
-                         &vPlain[0], vPlain.size ( ), &cb ) != p2pseal::SealOk )
-        ++nBad;
-    }
-    dW1 = WallSeconds ( ); dC1 = CpuSeconds ( );
-    if ( !vSealed.empty ( ) )
-      std::printf ( "[linkcost]   OpenFrom      %8.1f us wall  %8.1f us CPU  per call"
-                    "  (%ld refused)\n",
-                    ( dW1 - dW0 ) * 1e6 / (double)vSealed.size ( ),
-                    ( dC1 - dC0 ) * 1e6 / (double)vSealed.size ( ), nBad );
-    std::fflush ( stdout );
+    oA.SealModeOutbound ( p2pseal::SealMode_PerMessage );
+    for ( int r = 0; r < kBenchExtra; ++r )
+      if ( oA.AddSealReader ( kBenchExtraW[r] ) != p2pcng::IdOk )
+      { Log ( "SETUP: AddSealReader failed - multi-reader rows skipped" ); return; }
+    SealOpenRows ( oA, oC, vBody, nIter, "SealFor/4r",    "OpenFrom/4r"    );
+
+    oA.SealModeOutbound ( p2pseal::SealMode_Context );
+    SealOpenRows ( oA, oC, vBody, nIter, "SealFor/ctx4r", "OpenFrom/ctx4r" );
+
+    oA.SealModeOutbound ( p2pseal::SealMode_PerMessage );
+    oA.ClearSealReaders ( );
 }
 
 // =========================================================================

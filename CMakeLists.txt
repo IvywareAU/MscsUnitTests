@@ -515,6 +515,22 @@ add_test(NAME p2p_sealdefault COMMAND p2p_sealdefault)
 set_tests_properties(p2p_sealdefault PROPERTIES
     TIMEOUT 60 LABELS security)
 
+# p2p_sealmode: p2p_performance T1d, the two seal modes behind one switch
+# (decision 1), at the HUB. p2pseal::SealSelfTest proves the v3 format; this
+# proves the layer an operator configures - P2PeerHub forwarding to AuthPolicy:
+# PerMessage stays the default and writes v2, SealModeOutbound(Context) writes
+# v3 in one context, SealModeAccept(false) refuses by policy, the seq window
+# follows RefuseSealReplay, a context rotates on its bound and ends on
+# ReloadAllowList, and a relabelled v3 body does not open.
+# NO SOCKETS, so no RESOURCE_LOCK and no port.
+#   STATUS: PASSES        (measured 2026-11-28, Windows Release + Linux VM)
+add_executable(p2p_sealmode p2p_sealmode.cpp)
+_mscs_test_common(p2p_sealmode)
+target_link_libraries(p2p_sealmode PRIVATE targetcore msgcore p2pplatform)
+add_test(NAME p2p_sealmode COMMAND p2p_sealmode)
+set_tests_properties(p2p_sealmode PROPERTIES
+    TIMEOUT 60 LABELS security)
+
 # p2p_keyrotate: the gate after authpsk. authpsk proves the identity a peer
 # claims is REAL. This asks what happens when that identity's key has to
 # CHANGE - which SECURITY.md's roadmap carried as unanswered for four sessions
@@ -2588,9 +2604,17 @@ if(WIN32)
     add_executable(seal_interop seal_interop.cpp)
     _mscs_test_common(seal_interop)
     target_link_libraries(seal_interop PRIVATE targetcore msgcore p2pplatform)
+    #   seal3_*.vec (Targetcore 3.12.0, T1d): two v3 context bodies to two
+    #   readers, so the second open runs on the key cached from the first.
+    #   seal3_cpp23_openssl.vec was sealed by the C++23 track's legacy::
+    #   seal_body_v3 (_NextStep/C++23 legacy.session, MSCS_SEAL3_EMIT), so this
+    #   test also opens a body the OTHER implementation wrote.
     add_test(NAME seal_interop COMMAND seal_interop verify
         ${CMAKE_CURRENT_SOURCE_DIR}/vectors/seal_windows_cng.vec
-        ${CMAKE_CURRENT_SOURCE_DIR}/vectors/seal_linux_openssl.vec)
+        ${CMAKE_CURRENT_SOURCE_DIR}/vectors/seal_linux_openssl.vec
+        ${CMAKE_CURRENT_SOURCE_DIR}/vectors/seal3_windows_cng.vec
+        ${CMAKE_CURRENT_SOURCE_DIR}/vectors/seal3_linux_openssl.vec
+        ${CMAKE_CURRENT_SOURCE_DIR}/vectors/seal3_cpp23_openssl.vec)
     set_tests_properties(seal_interop PROPERTIES TIMEOUT 60 LABELS security)
 endif()
 
